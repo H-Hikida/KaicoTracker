@@ -1,2 +1,5 @@
 # test files
 /test/
+
+# VS code settings
+.vscode/
