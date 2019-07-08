@@ -1,10 +1,11 @@
 import sys
-import random
+from collections import Counter
 import numpy as np
 import pandas as pd
 import cv2
 from PIL import Image
 import imagehash
+from sklearn.cluster import KMeans
 
 
 # generate hash from images
@@ -29,73 +30,69 @@ def hashSampling(frame, L, type="a"):
 
 
 # summrize contours' information
-def sumContrours(contours):
+def sumContrours(contours, img):
     contours_new = []
-    areas = []
-    cxs = []
-    cys = []
+    params = []
     for i in contours:
+        # simplify contours
         epsilon = 0.01*cv2.arcLength(i, True)
         approx = cv2.approxPolyDP(i, epsilon, True)
-        contours_new.append(approx)
-        area = cv2.contourArea(i)
-        areas.append(area)
+        # get contours properties
         M = cv2.moments(i)
         if M["m00"] != 0:
-            cx = int(M['m10']/M['m00'])
-            cy = int(M['m01']/M['m00'])
-        else:
-            cx = None
-            cy = None
-        cxs.append(cx)
-        cys.append(cy)
-    df = pd.DataFrame({"area": areas, "X": cxs, "Y": cys})
-    return contours_new, df
+            area = cv2.contourArea(i)
+            perimeter = cv2.arcLength(i, True)
+            mask = np.zeros(img.shape[0:2], dtype=np.uint8)
+            cv2.drawContours(mask, [i], 0, 255, -1)
+            mean, std = cv2.meanStdDev(img, mask=mask)
+            contours_new.append(approx)
+            param = [
+                area,
+                perimeter,
+                float(mean[0]),
+                float(mean[1]),
+                float(mean[2]),
+                float(std[0]),
+                float(std[1]),
+                float(std[2])
+            ]
+            params.append(param)
+            # print(mean, std)
+    return contours_new, params
 
 
-# virtually crop image with biggest contour
-def vCropBiggest(contours, df):
-    areas = list(df["area"].values)
-    b_index = areas.index(max(areas))
-    biggestContour = contours[b_index]
-    L = []
-    for i in biggestContour:
-        L.append(i[0])
-    cdf = pd.DataFrame.from_records(L)
-    xmin, xmax = np.float64(min(cdf[0].values)), np.float64(max(cdf[0].values))
-    ymin, ymax = np.float64(min(cdf[1].values)), np.float64(max(cdf[1].values))
-    tags = []
-    for _, i in df.iterrows():
-        if (np.isnan(i["X"])) | (np.isnan(i["Y"])):
-            tag = False
-        else:
-            if (xmin < i["X"] < xmax) & (ymin < i["Y"] < ymax):
-                tag = True
-            else:
-                tag = False
-        tags.append(tag)
-    df["tag"] = tags
-    new_df = df[df["tag"]]
-    new_contours = list(np.array(contours)[np.array(tags)])
-    return new_contours, new_df
+# clustering contours
+def clusterCNT(params):
+    aparams = np.array(params)
+    kmeans = KMeans(n_clusters=3, random_state=0).fit(aparams)
+    labels = kmeans.labels_
+    # for i in range(1,6):
+    #    if labels.count(i) == larvae:
+    #        key = i
+    # keys = [i for i in labels if i == key]
+    return len(labels), labels
 
 
-# selection based on area
-def selectLarvae(contours, df):
-    largest = max(df["area"])
-    tags = []
-    for i in df["area"]:
-        tag = largest/1000 < i < largest/50
-        tags.append(tag)
-    new_contours = list(np.array(contours)[np.array(tags)])
-    return new_contours
+# draw contours with different colors
+# colors are list of integer designating the cluster
+def drawCNT(img, cnt, colors):
+    pallette = [
+        (0, 0, 255),
+        (0, 255, 0),
+        (255, 0, 0),
+        ]
+    c = 0
+    for i in cnt:
+        img = cv2.drawContours(img, i, -1, pallette[colors[c]], 2)
+        c += 1
+    return img
 
 
 # set threshold and mask
 def cutoutLarvae(hsv, larvae):
     contours = list(range(0, larvae * 11))
     mat = np.array([[0, 0, 100], [360, 100, 255]])
-    NowTraining = True
+    # gaussian filter
     hsv = cv2.GaussianBlur(hsv, (5, 5), 0)
     # make masked data
     lower = np.array(mat[0], dtype=np.uint8)
@@ -109,12 +106,13 @@ def cutoutLarvae(hsv, larvae):
                     cv2.RETR_TREE,
                     cv2.CHAIN_APPROX_SIMPLE
                     )
-    cnew, df = sumContrours(contours)
-    contours_temp, new_df = vCropBiggest(cnew, df)
-    contours_larvae = selectLarvae(contours_temp, new_df)
-    # make image with contours
-    img_cont = cv2.drawContours(res, contours_larvae, -1, (0, 0, 255), 1)
-    return img_cont, len(contours_larvae)
+    # collect properties of contours
+    cnt_new, params = sumContrours(contours, hsv)
+    # clustering based on parameter
+    colnum, colors = clusterCNT(params)
+    # make image with contours with different colors
+    img_cont = drawCNT(res, cnt_new, colors)
+    return img_cont, len(cnt_new)
 
 
 # main body
@@ -133,8 +131,6 @@ if __name__ == "__main__":
     # read the video
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     cap = cv2.VideoCapture(in_path)
-    # length = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    # print(length)
 
     # generate output
     outx, outy = int(cap.get(3)), int(cap.get(4))
