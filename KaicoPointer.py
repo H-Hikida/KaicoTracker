@@ -2,7 +2,8 @@ import os
 import sys
 import numpy as np
 import pandas as pd
-import cv2
+import cv2 as cv
+import argparse
 
 
 # plot the center
@@ -10,7 +11,7 @@ def PlotCenter(frame, df):
     for _, i in df.iterrows():
             x = int(round(i["X"], None))
             y = int(round(i["Y"], None))
-            frame = cv2.circle(
+            frame = cv.circle(
                 frame,
                 (x, y),
                 5,
@@ -21,6 +22,40 @@ def PlotCenter(frame, df):
 
 
 # main body
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Plot center position')
+    parser.add_argument('--video', type=str, help='Path to a video or a sequence of image.', default='vtest.avi')
+    parser.add_argument('--borders', type=str, help='Path to a file designating borders', default='test.txt')
+    parser.add_argument('--prefix', type=str, help='Path and prefix of output video and table.', default='stdout')
+    parser.add_argument('--top', type=int, help='top position of frame', default=-1)
+    parser.add_argument('--bottom', type=int, help='bottom position of frame', default=0)
+    parser.add_argument('--left', type=int, help='left position of frame', default=0)
+    parser.add_argument('--right', type=int, help='right position of frame', default=-1)
+    parser.add_argument('--fps', type=int, help='frame rate of output video', default=-1)
+    args = parser.parse_args()
+
+    # read input & make output
+    cap = cv.VideoCapture(args.video)
+    if args.fps < 0:
+        fps = cap.get(cv.CAP_PROP_FPS)
+    else:
+        fps = args.fps
+    fourcc = cv.VideoWriter_fourcc(*'mp4v')
+    videoW = cap.get(cv.CAP_PROP_FRAME_WIDTH)
+    videoH = cap.get(cv.CAP_PROP_FRAME_HEIGHT)
+
+    if args.top < 0:
+        top = videoH
+    else:
+        top = args.top
+    if args.right < 0:
+        right = videoW
+    else:
+        right = args.right
+    
+    out = cv.VideoWriter("{}.mp4".format(args.prefix), fourcc, fps, (right-args.left, top-args.bottom))
+
+
 if __name__ == "__main__":
     # check the number of argument
     argvs = sys.argv
@@ -37,19 +72,19 @@ if __name__ == "__main__":
 
     # check the format
     if form == "AVI":
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        fourcc = cv.VideoWriter_fourcc(*'XVID')
     elif form == "MP4":
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv.VideoWriter_fourcc(*'mp4v')
     else:
         print("format should be AVI or MP4")
         sys.exit()
 
     # read input & make output
-    cap = cv2.VideoCapture(inf)
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    cap = cv.VideoCapture(inf)
+    fps = cap.get(cv.CAP_PROP_FPS)
     outx = int(cap.get(3))
     outy = int(cap.get(4))
-    out = cv2.VideoWriter(outf, fourcc, fps, (outx, outy))
+    out = cv.VideoWriter(outf, fourcc, fps, (outx, outy))
 
     # depict the circles
     c = 0
@@ -60,7 +95,7 @@ if __name__ == "__main__":
             c += 1
             of = PlotCenter(frame, temp)
             out.write(of)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            if cv.waitKey(1) & 0xFF == ord('q'):
                 break
         else:
             break
@@ -68,4 +103,4 @@ if __name__ == "__main__":
     # release videos
     cap.release
     out.release()
-    cv2.destroyAllWindows()
+    cv.destroyAllWindows()
