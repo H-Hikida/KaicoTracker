@@ -112,12 +112,9 @@ if __name__ == '__main__':
                 pbar.update(1)
                 frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES)) + startSlice
 
-                # cropping
+                # cropping & background subtraction & blurring foreground
                 frameCropped = frame[args.bottom: top, args.left: right]
-
-                # background subtraction
                 fgMask = backSub.apply(frameCropped, learningRate=args.learningRate)
-                # blurring foreground
                 fgMaskBlur = cv.blur(fgMask, (args.blurringSquare, args.blurringSquare))
 
                 # display current frame #
@@ -170,6 +167,7 @@ if __name__ == '__main__':
     xborder, yborder = defineBorders(df)
     merged_list = []
     print("Start analyzing...")
+    # Distant calculation
     with open('{}_totalDist.txt'.format(args.prefix), "w") as outDist:
         with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
             for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
@@ -192,6 +190,8 @@ if __name__ == '__main__':
     dfMerged = pd.concat(merged_list, axis=0, sort=False, ignore_index=True)
     dfMerged.to_csv('{}_positions.txt'.format(args.prefix), sep='\t', index=False)
     plt.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
+    plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
+    plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
     plt.savefig('{}_positions.png'.format(args.prefix), format="png", dpi=200)
     plt.close()
 
