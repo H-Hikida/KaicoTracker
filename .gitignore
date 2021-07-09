@@ -1,5 +1,7 @@
 # test files
 /test/
+memo.sh
+
 
 # VS code settings
 .vscode/

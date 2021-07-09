@@ -36,7 +36,7 @@ def mergePoints(df, total):
     return pd.concat(outDfs, sort=False)
 
 
-def DistantCalc(data, period):
+def DistantCalc(data, period, id):
     times = []
     for i in range(1, period+1):
         time = data[data.Slice == i]
@@ -59,7 +59,48 @@ def DistantCalc(data, period):
     data1["distance"] = [0] + list(dist)
     accdist = np.cumsum(data1.distance)
     data1["accumlated"] = accdist
-    return (data1, list(accdist)[-1])
+    data1["id"] = id
+    plt.figure(figsize=(6,2))
+    plt.scatter('Slice', 'distance', data=data1, s=0.1, alpha=0.5, c="gray")
+    plt.ylim(-1,20)
+    sns.despine()
+    plt.savefig('{}_distance_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.close()
+    sns.lineplot('Slice', 'accumlated', linewidth=1, color='gray')
+    sns.despine()
+    plt.savefig('{}_accdist_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.close()
+    active = data1[data1.distance>0]
+    plt.figure(figsize=(3,1))
+    sns.distplot(active.distance)
+    plt.savefig('{}_speed_distplot_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.close()
+    return (data1, list(accdist)[-1], active.distance.median())
+
+
+def CalcAreaChange(df, totalSlice, id, length=-1):
+    _, axs = plt.subplots(nrows=1, ncols=args.segment+1, figsize=(args.segment+1, 1))
+    plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0)
+    Xcen = df.XM.mean()
+    Ycen = df.YM.mean()
+    if length < 0:
+        Xstd = df.XM.std()
+        Ystd = df.YM.std()
+        length = max(Xstd, Ystd) * 3
+    for k in range(0, args.segment+1):
+        trange = totalSlice // args.segment
+        part = df[(df.Slice > trange * k) & (df.Slice <= trange * (k+1))]
+        axs[k].set_xlim(Xcen-length, Xcen+length)
+        axs[k].set_ylim(Ycen-length, Ycen+length)
+        axs[k].scatter(part.XM, part.YM, s=0.1, alpha=0.5, c='gray')
+        #for sp_type in ["left", "right", "bottom", "top"]:
+        #    axs[k].spines[sp_type].set_visible(False)
+        axs[k].set_xticklabels([])
+        axs[k].set_yticklabels([])
+        axs[k].set_xticks([])
+        axs[k].set_yticks([])
+    plt.savefig('{}_segment_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.close()
 
 
 if __name__ == '__main__':
@@ -77,6 +118,8 @@ if __name__ == '__main__':
     parser.add_argument('--bottom', type=int, help='bottom position of frame', default=0)
     parser.add_argument('--left', type=int, help='left position of frame', default=0)
     parser.add_argument('--right', type=int, help='right position of frame', default=-1)
+    parser.add_argument('--segment', type=int, help='how many segment used for area segment', default=-1)
+    parser.add_argument('--segment_edge_length', type=int, help='length of segment square', default=-1)
     args = parser.parse_args()
 
     #----------------------# Tracking #----------------------#
@@ -168,7 +211,8 @@ if __name__ == '__main__':
     merged_list = []
     print("Start analyzing...")
     # Distant calculation
-    with open('{}_totalDist.txt'.format(args.prefix), "w") as outDist:
+    with open('{}_dist_data.txt'.format(args.prefix), "w") as outDist:
+        outDist.write('\t'.join(["id", "total_distance", "median_spped"])+'\n')
         with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
             for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
                 cut_bottom = yborder[j]
@@ -178,14 +222,11 @@ if __name__ == '__main__':
                 area_id = '{}_{}_{}_{}'.format(cut_left, cut_right, cut_bottom, cut_top)
                 temp = df[(df.XM > cut_left) & (df.XM < cut_right) & (df.YM > cut_bottom) & (df.YM < cut_top)]
                 merged = mergePoints(temp, totalSlice)
-                merged['area'] = area_id
-                merged_list.append(merged)
-                dfDist, totalDist = DistantCalc(merged, totalSlice)
-                outDist.write('\t'.join([area_id, str(totalDist)])+'\n')
-                plt.scatter('Slice', 'distance', data=dfDist, s=0.1, alpha=0.5, c="gray")
-                sns.despine()
-                plt.savefig('{}_distance_{}.png'.format(args.prefix, area_id), format="png", dpi=200)
-                plt.close()
+                dfDist, totalDist, medSpeed = DistantCalc(merged, totalSlice, area_id)
+                if args.segment > 0:
+                    CalcAreaChange(dfDist, totalSlice, area_id, args.segment_edge_length)
+                merged_list.append(dfDist)
+                outDist.write('\t'.join([area_id, str(totalDist), str(medSpeed)])+'\n')
                 pbar.update(1)
     dfMerged = pd.concat(merged_list, axis=0, sort=False, ignore_index=True)
     dfMerged.to_csv('{}_positions.txt'.format(args.prefix), sep='\t', index=False)
@@ -199,6 +240,7 @@ if __name__ == '__main__':
     # Video setting
     if args.noPoint:
         print("Start pointing...")
+        startSlice = 0
         for inCap in args.input:
             capture = cv.VideoCapture(cv.samples.findFileOrKeep(inCap))
             fcount = int(capture.get(cv.CAP_PROP_FRAME_COUNT))
@@ -207,15 +249,17 @@ if __name__ == '__main__':
             else:
                 fps = args.fps 
             
-            fourcc = cv.VideoWriter_fourcc(*'mp4v')
-            outVideo = cv.VideoWriter("pointed_{}.mp4".format(inCap), fourcc, fps, (right-args.left, top-args.bottom))
+            fourcc = cv.VideoWriter_fourcc('m','p','4', 'v')
+            oWidth = int((right-args.left) * 0.5)
+            oHeight = int((top-args.bottom) * 0.5)
+            outVideo = cv.VideoWriter("{}_pointed_{}".format(args.prefix, inCap.replace("avi", "mp4")), fourcc, fps, (oWidth, oHeight), isColor=False)
             with tqdm.tqdm(total=fcount) as pbar:
                 while True:
                     ret, frame = capture.read()
                     if frame is None:
                         break
                     pbar.update(1)
-                    frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES))
+                    frame_num = startSlice + int(capture.get(cv.CAP_PROP_POS_FRAMES))
                     frameCropped = frame[args.bottom: top, args.left: right]
                     temp = dfMerged[(dfMerged['Slice'] == frame_num) & (dfMerged['file'] == inCap)]
                     if len(temp) > 0:
@@ -226,8 +270,10 @@ if __name__ == '__main__':
                     im_gray = cv.cvtColor(frameCropped, cv.COLOR_BGR2GRAY)
                     if args.live:
                         cv.imshow('outVideo', im_gray)
-                    outVideo.write(im_gray)
+                    outVideo.write(cv.resize(im_gray, dsize=(oWidth, oHeight)))
 
                     keyboard = cv.waitKey(30)
                     if keyboard == 'q' or keyboard == 27:
                         break
+            outVideo.release()
+            startSlice += fcount
