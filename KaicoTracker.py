@@ -66,7 +66,7 @@ def DistantCalc(data, period, id):
     sns.despine()
     plt.savefig('{}_distance_{}.png'.format(args.prefix, id), format="png", dpi=200)
     plt.close()
-    sns.lineplot('Slice', 'accumlated', linewidth=1, color='gray')
+    sns.lineplot('Slice', 'accumlated', data=data1, linewidth=1, color='gray')
     sns.despine()
     plt.savefig('{}_accdist_{}.png'.format(args.prefix, id), format="png", dpi=200)
     plt.close()
@@ -103,6 +103,52 @@ def CalcAreaChange(df, totalSlice, id, length=-1):
     plt.close()
 
 
+def CalcDuration(df, window, id, thresholdDist=1, thresholdActive=0.95):
+    ind = 0
+    ext = 0
+    dfs = []
+    dfPosition = df.reset_index(drop=True)
+    while ind + window + ext < dfPosition.index.max():
+        temp = dfPosition[ind:ind + window + ext].reset_index(drop=True)
+        activeRatio = len([i for i in temp.index if temp.loc[i, 'distance'] > thresholdDist]) / len(temp)
+        if (temp.distance.mean() > thresholdDist) & (activeRatio > thresholdActive):
+            ext += 1
+        elif ext > 1:
+            dfLine = pd.DataFrame({'start':ind+1, 'end':ind + window + ext, 'duration':window + ext}, index=[ind+1])
+            dfs.append(dfLine)
+            ind = ind + window
+            ext = 0
+        else:
+            ind += 1
+    if len(dfs) > 0:
+        oDf = pd.concat(dfs, sort=False, ignore_index=True)
+        return oDf
+    else:
+        return dfs
+
+
+def returnCalcDuration(dfDur, dfDist, id):
+    plt.figure(figsize=(3,1))
+    sns.distplot(dfDur.duration)
+    plt.savefig('{}_duration_distplot_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.close()
+    listDur = dfDist.Slice.values
+    activeTimePoint = []
+    for i in dfDur.index:
+        activeTimePoint += list(np.linspace(dfDur.loc[i, 'start'], dfDur.loc[i, 'end'], dfDur.loc[i,'duration']))
+    plotDur = [i/i if i in activeTimePoint else i*0 for i in listDur]
+    plt.figure(figsize=(3,2))
+    _, axs = plt.subplots(nrows=2, ncols=1, figsize=(args.segment+1, 1))
+    plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0)
+    axs[0].scatter('Slice', 'distance', data=dfDist, s=0.1, alpha=0.5, c="gray")
+    sns.lineplot(dfDist.Slice, plotDur, drawstyle='steps-pre', color='gray', linewidth=1, ax=axs[1])
+    axs[1].fill_between(dfDist.Slice, plotDur, color='gray', step='pre')
+    sns.despine()
+    plt.savefig('{}_locomotion_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.close()
+    return dfDur.duration.median()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='This program shows how to use background subtraction methods provided by \
                                                 OpenCV. You can process both videos and images.')
@@ -120,6 +166,7 @@ if __name__ == '__main__':
     parser.add_argument('--right', type=int, help='right position of frame', default=-1)
     parser.add_argument('--segment', type=int, help='how many segment used for area segment', default=-1)
     parser.add_argument('--segment_edge_length', type=int, help='length of segment square', default=-1)
+    parser.add_argument('--window', type=int, help='seed window for duration analysis', default=10)
     args = parser.parse_args()
 
     #----------------------# Tracking #----------------------#
@@ -163,7 +210,6 @@ if __name__ == '__main__':
                 # display current frame #
                 cv.rectangle(frameCropped, (10, 2), (100,20), (255,255,255), -1)
                 cv.putText(frameCropped, str(frame_num), (15, 15), cv.FONT_HERSHEY_SIMPLEX, 0.5 , (0,0,0))
-
                 canny_output = cv.Canny(fgMaskBlur, 100, 100 * 2)
                 contours, hierarchy = cv.findContours(canny_output, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
                 # Draw contours
@@ -212,7 +258,7 @@ if __name__ == '__main__':
     print("Start analyzing...")
     # Distant calculation
     with open('{}_dist_data.txt'.format(args.prefix), "w") as outDist:
-        outDist.write('\t'.join(["id", "total_distance", "median_spped"])+'\n')
+        outDist.write('\t'.join(["id", "total_distance", "median_speed", "median_duration", "frequency"])+'\n')
         with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
             for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
                 cut_bottom = yborder[j]
@@ -223,10 +269,15 @@ if __name__ == '__main__':
                 temp = df[(df.XM > cut_left) & (df.XM < cut_right) & (df.YM > cut_bottom) & (df.YM < cut_top)]
                 merged = mergePoints(temp, totalSlice)
                 dfDist, totalDist, medSpeed = DistantCalc(merged, totalSlice, area_id)
+                dfDur = CalcDuration(dfDist, args.window, area_id)
+                if len(dfDur) > 0:
+                    medDur = returnCalcDuration(dfDur, dfDist, area_id)
+                else:
+                    medDur = 0
                 if args.segment > 0:
                     CalcAreaChange(dfDist, totalSlice, area_id, args.segment_edge_length)
                 merged_list.append(dfDist)
-                outDist.write('\t'.join([area_id, str(totalDist), str(medSpeed)])+'\n')
+                outDist.write('\t'.join([area_id, str(totalDist), str(medSpeed), str(medDur), str(len(dfDur))])+'\n')
                 pbar.update(1)
     dfMerged = pd.concat(merged_list, axis=0, sort=False, ignore_index=True)
     dfMerged.to_csv('{}_positions.txt'.format(args.prefix), sep='\t', index=False)
