@@ -9,6 +9,7 @@ import cv2 as cv
 import argparse
 import tqdm
 import itertools
+from multiprocessing import Pool
 
 
 def defineBorders(df):
@@ -20,7 +21,7 @@ def defineBorders(df):
         borders[i] = [0] + signal.argrelmin(estimates)[0].tolist() + [df[i].max()]
         print(i, borders[i])
         plt.scatter(Slices, estimates, s=0.1, c="gray")
-        plt.savefig('{}_{}_kde.png'.format(args.prefix, i), format="png", dpi=200)
+        plt.savefig('{}_{}_kde.{}'.format(args.prefix, i, args.format), format=args.format, dpi=200)
         plt.close()
     return borders['XM'], borders['YM']
 
@@ -64,16 +65,16 @@ def DistantCalc(data, period, id):
     plt.scatter('Slice', 'distance', data=data1, s=0.1, alpha=0.5, c="gray")
     plt.ylim(-1,20)
     sns.despine()
-    plt.savefig('{}_distance_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.savefig('{}_distance_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
     plt.close()
     sns.lineplot('Slice', 'accumlated', data=data1, linewidth=1, color='gray')
     sns.despine()
-    plt.savefig('{}_accdist_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.savefig('{}_accdist_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
     plt.close()
     active = data1[data1.distance>0]
     plt.figure(figsize=(3,1))
     sns.distplot(active.distance)
-    plt.savefig('{}_speed_distplot_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.savefig('{}_speed_distplot_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
     plt.close()
     return (data1, list(accdist)[-1], active.distance.median())
 
@@ -93,13 +94,11 @@ def CalcAreaChange(df, totalSlice, id, length=-1):
         axs[k].set_xlim(Xcen-length, Xcen+length)
         axs[k].set_ylim(Ycen-length, Ycen+length)
         axs[k].scatter(part.XM, part.YM, s=0.1, alpha=0.5, c='gray')
-        #for sp_type in ["left", "right", "bottom", "top"]:
-        #    axs[k].spines[sp_type].set_visible(False)
         axs[k].set_xticklabels([])
         axs[k].set_yticklabels([])
         axs[k].set_xticks([])
         axs[k].set_yticks([])
-    plt.savefig('{}_segment_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.savefig('{}_segment_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
     plt.close()
 
 
@@ -130,7 +129,7 @@ def CalcDuration(df, window, id, thresholdDist=1, thresholdActive=0.95):
 def returnCalcDuration(dfDur, dfDist, id):
     plt.figure(figsize=(3,1))
     sns.distplot(dfDur.duration)
-    plt.savefig('{}_duration_distplot_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.savefig('{}_duration_distplot_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
     plt.close()
     listDur = dfDist.Slice.values
     activeTimePoint = []
@@ -144,7 +143,7 @@ def returnCalcDuration(dfDur, dfDist, id):
     sns.lineplot(dfDist.Slice, plotDur, drawstyle='steps-pre', color='gray', linewidth=1, ax=axs[1])
     axs[1].fill_between(dfDist.Slice, plotDur, color='gray', step='pre')
     sns.despine()
-    plt.savefig('{}_locomotion_{}.png'.format(args.prefix, id), format="png", dpi=200)
+    plt.savefig('{}_locomotion_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
     plt.close()
     return dfDur.duration.median()
 
@@ -152,21 +151,24 @@ def returnCalcDuration(dfDur, dfDist, id):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='This program shows how to use background subtraction methods provided by \
                                                 OpenCV. You can process both videos and images.')
-    parser.add_argument('--input', type=str, nargs='+', help='Path to a video or a sequence of image.', default=['vtest.avi'])
-    parser.add_argument('--prefix', type=str, help='Prefix of path to output files.', default='stdout')
-    parser.add_argument('--algo', type=str, help='Background subtraction method (KNN, MOG2).', default='KNN')
-    parser.add_argument('--learningRate', type=float, help='Learning Rate for apply method', default=-1)
-    parser.add_argument('--blurringSquare', type=int, help='Edge length of blurring square', default=10)
+    parser.add_argument('--input', type=str, metavar='file', nargs='+', help='Path to a video or a sequence of image.', default=['vtest.avi'])
+    parser.add_argument('--prefix', type=str, metavar='prefix', help='Prefix of path to output files.', default='stdout')
+    parser.add_argument('--algo', type=str, help='Background subtraction method.', default='KNN', choices=['MOG2', 'KNN'])
+    parser.add_argument('--learningRate', metavar='float', type=float, help='Learning Rate for apply method', default=-1)
+    parser.add_argument('--blurringSquare', metavar='length', type=int, help='Edge length of blurring square', default=10)
     parser.add_argument('--live', action='store_true', help='Display processing movie in live, default=False')
     parser.add_argument('--noPoint', action='store_false', help='Pointing, default=True')
-    parser.add_argument('--fps', type=int, help='output FPS', default=-1)
-    parser.add_argument('--top', type=int, help='top position of frame', default=-1)
-    parser.add_argument('--bottom', type=int, help='bottom position of frame', default=0)
-    parser.add_argument('--left', type=int, help='left position of frame', default=0)
-    parser.add_argument('--right', type=int, help='right position of frame', default=-1)
-    parser.add_argument('--segment', type=int, help='how many segment used for area segment', default=-1)
-    parser.add_argument('--segment_edge_length', type=int, help='length of segment square', default=-1)
-    parser.add_argument('--window', type=int, help='seed window for duration analysis', default=10)
+    parser.add_argument('--fps', metavar='FPS', type=int, help='output FPS', default=-1)
+    parser.add_argument('--analysis_range', metavar='range', nargs=2, type=int, help='a range of frames to be analyzed', default=(0, -1))
+    parser.add_argument('--top', metavar='px', type=int, help='top position of frame', default=-1)
+    parser.add_argument('--bottom', metavar='px', type=int, help='bottom position of frame', default=0)
+    parser.add_argument('--left', metavar='px', type=int, help='left position of frame', default=0)
+    parser.add_argument('--right', metavar='px', type=int, help='right position of frame', default=-1)
+    parser.add_argument('--segment', metavar='int', type=int, help='how many segment used for area segment', default=-1)
+    parser.add_argument('--segment_edge_length', metavar='px', type=int, help='length of segment square', default=-1)
+    parser.add_argument('--window', metavar='frames', type=int, help='seed window for duration analysis', default=10)
+    parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
+    parser.add_argument('--process', type=int, help='number of process for analysis', default=1)
     args = parser.parse_args()
 
     #----------------------# Tracking #----------------------#
@@ -257,6 +259,7 @@ if __name__ == '__main__':
     merged_list = []
     print("Start analyzing...")
     # Distant calculation
+    sepDict = []
     with open('{}_dist_data.txt'.format(args.prefix), "w") as outDist:
         outDist.write('\t'.join(["id", "total_distance", "median_speed", "median_duration", "frequency"])+'\n')
         with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
@@ -267,6 +270,10 @@ if __name__ == '__main__':
                 cut_right = xborder[i+1]
                 area_id = '{}_{}_{}_{}'.format(cut_left, cut_right, cut_bottom, cut_top)
                 temp = df[(df.XM > cut_left) & (df.XM < cut_right) & (df.YM > cut_bottom) & (df.YM < cut_top)]
+                temp.id = area_id
+                sepDict.append(temp)
+            for _ in Pool.imap_unordered(f, data):
+            with Pool(args.process) as p:
                 merged = mergePoints(temp, totalSlice)
                 dfDist, totalDist, medSpeed = DistantCalc(merged, totalSlice, area_id)
                 dfDur = CalcDuration(dfDist, args.window, area_id)
@@ -284,7 +291,7 @@ if __name__ == '__main__':
     plt.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
     plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
     plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
-    plt.savefig('{}_positions.png'.format(args.prefix), format="png", dpi=200)
+    plt.savefig('{}_positions.{}'.format(args.prefix, args.format), format=args.format, dpi=200)
     plt.close()
 
     #----------------------# Pointing #----------------------#
