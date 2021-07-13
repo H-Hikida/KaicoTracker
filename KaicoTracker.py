@@ -9,7 +9,7 @@ import cv2 as cv
 import argparse
 import tqdm
 import itertools
-from multiprocessing import Pool
+import warnings
 
 
 def defineBorders(df):
@@ -22,37 +22,38 @@ def defineBorders(df):
         print(i, borders[i])
         plt.scatter(Slices, estimates, s=0.1, c="gray")
         plt.savefig('{}_{}_kde.{}'.format(args.prefix, i, args.format), format=args.format, dpi=200)
-        plt.close()
+        plt.close('all')
     return borders['XM'], borders['YM']
 
 
-def mergePoints(df, total):
+def mergePoints(df):
     outDfs = []
-    for i in range(1,total):
+    for i in analysisRange:
         points = df[df.Slice == i]
         if len(points) > 0:
             outX = int(points.XM.mean())
             outY = int(points.YM.mean())
-            outDfs.append(pd.DataFrame({'Slice': i, 'XM': outX, 'YM': outY, 'file': points.file.tolist()[0]}, index=[i]))
+            outDfs.append(pd.DataFrame({'Slice': i, 'XM': outX, 'YM': outY, 'file': points.file.tolist()[0], 'id': df['id'].iloc[0]}, index=[i]))
     return pd.concat(outDfs, sort=False)
 
 
-def DistantCalc(data, period, id):
+def DistantCalc(data):
     times = []
-    for i in range(1, period+1):
+    for i in analysisRange:
         time = data[data.Slice == i]
         if len(time) == 1:
             times.append(time)
-        elif (len(time) == 0) & (i > 1):
-            times.append(times[(i-1)-1])
-        elif (len(time) == 0) & (i == 1):
+        elif (len(time) == 0) & (i > initialAnalysis+1):
+            times.append(times[(i-1)-1-initialAnalysis])
+        elif (len(time) == 0) & (i == initialAnalysis+1):
             df_first = data[data.Slice == (i+1)]
             while(len(df_first) == 0):
                 i += 1
                 df_first = data[data.Slice == (i+1)]
             times.append(df_first)
     data1 = pd.concat(times, sort=False)
-    data1.Slice = range(1, period+1)
+    data1.loc[:,'id'] = data['id'].iloc[0]
+    data1.Slice = analysisRange
     dist = np.sqrt(\
                    np.power(data1.XM.values[0:len(data1)-1]-data1.XM.values[1:len(data1)], 2)\
                    + np.power(data1.YM.values[0:len(data1)-1]-data1.YM.values[1:len(data1)], 2)\
@@ -60,26 +61,25 @@ def DistantCalc(data, period, id):
     data1["distance"] = [0] + list(dist)
     accdist = np.cumsum(data1.distance)
     data1["accumlated"] = accdist
-    data1["id"] = id
     plt.figure(figsize=(6,2))
     plt.scatter('Slice', 'distance', data=data1, s=0.1, alpha=0.5, c="gray")
     plt.ylim(-1,20)
     sns.despine()
-    plt.savefig('{}_distance_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
-    plt.close()
-    sns.lineplot('Slice', 'accumlated', data=data1, linewidth=1, color='gray')
+    plt.savefig('{}_distance_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
+    plt.close('all')
+    sns.lineplot(x='Slice', y='accumlated', data=data1, linewidth=1, color='gray')
     sns.despine()
-    plt.savefig('{}_accdist_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
-    plt.close()
+    plt.savefig('{}_accdist_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
+    plt.close('all')
     active = data1[data1.distance>0]
     plt.figure(figsize=(3,1))
-    sns.distplot(active.distance)
-    plt.savefig('{}_speed_distplot_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
-    plt.close()
+    sns.displot(active.distance.array)
+    plt.savefig('{}_speed_distplot_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
+    plt.close('all')
     return (data1, list(accdist)[-1], active.distance.median())
 
 
-def CalcAreaChange(df, totalSlice, id, length=-1):
+def CalcAreaChange(df, length=-1):
     _, axs = plt.subplots(nrows=1, ncols=args.segment+1, figsize=(args.segment+1, 1))
     plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0)
     Xcen = df.XM.mean()
@@ -89,7 +89,7 @@ def CalcAreaChange(df, totalSlice, id, length=-1):
         Ystd = df.YM.std()
         length = max(Xstd, Ystd) * 3
     for k in range(0, args.segment+1):
-        trange = totalSlice // args.segment
+        trange = (endAnalysis - initialAnalysis) // args.segment
         part = df[(df.Slice > trange * k) & (df.Slice <= trange * (k+1))]
         axs[k].set_xlim(Xcen-length, Xcen+length)
         axs[k].set_ylim(Ycen-length, Ycen+length)
@@ -98,11 +98,11 @@ def CalcAreaChange(df, totalSlice, id, length=-1):
         axs[k].set_yticklabels([])
         axs[k].set_xticks([])
         axs[k].set_yticks([])
-    plt.savefig('{}_segment_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
-    plt.close()
+    plt.savefig('{}_segment_{}.{}'.format(args.prefix, df['id'].iloc[0], args.format), format=args.format, dpi=200)
+    plt.close('all')
 
 
-def CalcDuration(df, window, id, thresholdDist=1, thresholdActive=0.95):
+def CalcDuration(df, window, thresholdDist=1, thresholdActive=0.95):
     ind = 0
     ext = 0
     dfs = []
@@ -126,26 +126,39 @@ def CalcDuration(df, window, id, thresholdDist=1, thresholdActive=0.95):
         return dfs
 
 
-def returnCalcDuration(dfDur, dfDist, id):
+def plotDuration(dfDur, dfDist):
     plt.figure(figsize=(3,1))
-    sns.distplot(dfDur.duration)
-    plt.savefig('{}_duration_distplot_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
-    plt.close()
+    sns.displot(dfDur.duration)
+    plt.savefig('{}_duration_distplot_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
+    plt.close('all')
     listDur = dfDist.Slice.values
     activeTimePoint = []
     for i in dfDur.index:
-        activeTimePoint += list(np.linspace(dfDur.loc[i, 'start'], dfDur.loc[i, 'end'], dfDur.loc[i,'duration']))
-    plotDur = [i/i if i in activeTimePoint else i*0 for i in listDur]
+        activeTimePoint += list(np.arange(dfDur.loc[i, 'start'], dfDur.loc[i, 'end']))
+    plotDur = [1 if i in activeTimePoint else 0 for i in listDur]
     plt.figure(figsize=(3,2))
     _, axs = plt.subplots(nrows=2, ncols=1, figsize=(args.segment+1, 1))
     plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0)
     axs[0].scatter('Slice', 'distance', data=dfDist, s=0.1, alpha=0.5, c="gray")
-    sns.lineplot(dfDist.Slice, plotDur, drawstyle='steps-pre', color='gray', linewidth=1, ax=axs[1])
-    axs[1].fill_between(dfDist.Slice, plotDur, color='gray', step='pre')
+    sns.lineplot(x=dfDist.Slice, y=plotDur, drawstyle='steps-pre', color='gray', linewidth=1, ax=axs[1])
+    axs[1].fill_between(x=dfDist.Slice, y1=plotDur, color='gray', step='pre')
     sns.despine()
-    plt.savefig('{}_locomotion_{}.{}'.format(args.prefix, id, args.format), format=args.format, dpi=200)
-    plt.close()
+    plt.savefig('{}_locomotion_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
+    plt.close('all')
     return dfDur.duration.median()
+
+
+def AnalyzeData(df):
+    merged = mergePoints(df)
+    dfDist, totalDist, medSpeed = DistantCalc(merged)
+    dfDur = CalcDuration(dfDist, args.window)
+    if len(dfDur) > 0:
+        medDur = plotDuration(dfDur, dfDist)
+    else:
+        medDur = 0
+    if args.segment > 0:
+        CalcAreaChange(dfDist, args.segment_edge_length)
+    return '\t'.join([df['id'].iloc[0], str(totalDist), str(medSpeed), str(medDur), str(len(dfDur))])+'\n', dfDist
 
 
 if __name__ == '__main__':
@@ -168,7 +181,6 @@ if __name__ == '__main__':
     parser.add_argument('--segment_edge_length', metavar='px', type=int, help='length of segment square', default=-1)
     parser.add_argument('--window', metavar='frames', type=int, help='seed window for duration analysis', default=10)
     parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
-    parser.add_argument('--process', type=int, help='number of process for analysis', default=1)
     args = parser.parse_args()
 
     #----------------------# Tracking #----------------------#
@@ -254,45 +266,51 @@ if __name__ == '__main__':
     totalSlice = startSlice
 
     #----------------------# Analyzing #----------------------#
+    #warnings.simplefilter('error')
     print("Start border determination...")
     xborder, yborder = defineBorders(df)
     merged_list = []
     print("Start analyzing...")
     # Distant calculation
-    sepDict = []
+    sepList = []
+    initialAnalysis = args.analysis_range[0]
+    if args.analysis_range[1] > 0:
+        endAnalysis = args.analysis_range[1]
+    else:
+        endAnalysis = df.Slice.max()
+    dfAnalysis = df[(df.Slice > initialAnalysis) & (df.Slice < endAnalysis)]
+    analysisRange = range(initialAnalysis+1, endAnalysis+1)
+    print("Start merging...")
+    with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
+        for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
+            cut_bottom = yborder[j]
+            cut_top = yborder[j+1]
+            cut_left = xborder[i]
+            cut_right = xborder[i+1]
+            area_id = '{}_{}_{}_{}'.format(cut_left, cut_right, cut_bottom, cut_top)
+            temp = dfAnalysis[(dfAnalysis.XM > cut_left) & (dfAnalysis.XM < cut_right) & (dfAnalysis.YM > cut_bottom) & (dfAnalysis.YM < cut_top)].copy()
+            temp['id'] = area_id
+            sepList.append(temp)
+            pbar.update(1)
+    print("Start Calculating...")
+    oLines = []
+    with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
+        for i in sepList:
+            oLine, oDfDist = AnalyzeData(i)
+            oLines.append(oLine)
+            merged_list.append(oDfDist)
+            pbar.update(1)
     with open('{}_dist_data.txt'.format(args.prefix), "w") as outDist:
         outDist.write('\t'.join(["id", "total_distance", "median_speed", "median_duration", "frequency"])+'\n')
-        with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
-            for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
-                cut_bottom = yborder[j]
-                cut_top = yborder[j+1]
-                cut_left = xborder[i]
-                cut_right = xborder[i+1]
-                area_id = '{}_{}_{}_{}'.format(cut_left, cut_right, cut_bottom, cut_top)
-                temp = df[(df.XM > cut_left) & (df.XM < cut_right) & (df.YM > cut_bottom) & (df.YM < cut_top)]
-                temp.id = area_id
-                sepDict.append(temp)
-            for _ in Pool.imap_unordered(f, data):
-            with Pool(args.process) as p:
-                merged = mergePoints(temp, totalSlice)
-                dfDist, totalDist, medSpeed = DistantCalc(merged, totalSlice, area_id)
-                dfDur = CalcDuration(dfDist, args.window, area_id)
-                if len(dfDur) > 0:
-                    medDur = returnCalcDuration(dfDur, dfDist, area_id)
-                else:
-                    medDur = 0
-                if args.segment > 0:
-                    CalcAreaChange(dfDist, totalSlice, area_id, args.segment_edge_length)
-                merged_list.append(dfDist)
-                outDist.write('\t'.join([area_id, str(totalDist), str(medSpeed), str(medDur), str(len(dfDur))])+'\n')
-                pbar.update(1)
+        for i in oLines:
+            outDist.write(i)
     dfMerged = pd.concat(merged_list, axis=0, sort=False, ignore_index=True)
     dfMerged.to_csv('{}_positions.txt'.format(args.prefix), sep='\t', index=False)
     plt.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
     plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
     plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
     plt.savefig('{}_positions.{}'.format(args.prefix, args.format), format=args.format, dpi=200)
-    plt.close()
+    plt.close('all')
 
     #----------------------# Pointing #----------------------#
     # Video setting
