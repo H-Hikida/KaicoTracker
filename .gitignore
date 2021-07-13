@@ -1,7 +1,7 @@
 # test files
 /test/
 memo.sh
-
+.DS_Store
 
 # VS code settings
 .vscode/

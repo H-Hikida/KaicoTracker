@@ -21,6 +21,7 @@ def defineBorders(df):
         borders[i] = [0] + signal.argrelmin(estimates)[0].tolist() + [df[i].max()]
         print(i, borders[i])
         plt.scatter(Slices, estimates, s=0.1, c="gray")
+        plotTight(args.editable)
         plt.savefig('{}_{}_kde.{}'.format(args.prefix, i, args.format), format=args.format, dpi=200)
         plt.close('all')
     return borders['XM'], borders['YM']
@@ -62,18 +63,21 @@ def DistantCalc(data):
     accdist = np.cumsum(data1.distance)
     data1["accumlated"] = accdist
     plt.figure(figsize=(6,2))
-    plt.scatter('Slice', 'distance', data=data1, s=0.1, alpha=0.5, c="gray")
+    plt.scatter(x='Slice', y='distance', data=data1, s=0.1, alpha=0.5, c="gray")
     plt.ylim(-1,20)
     sns.despine()
+    plotTight(args.editable)
     plt.savefig('{}_distance_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
     plt.close('all')
+    plt.figure(figsize=(6,2))
     sns.lineplot(x='Slice', y='accumlated', data=data1, linewidth=1, color='gray')
     sns.despine()
+    plotTight(args.editable)
     plt.savefig('{}_accdist_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
     plt.close('all')
     active = data1[data1.distance>0]
-    plt.figure(figsize=(3,1))
-    sns.displot(active.distance.array)
+    sns.displot(data=active, x='distance', color= 'gray', height=2, aspect=3, kde=True)
+    plotTight(args.editable)
     plt.savefig('{}_speed_distplot_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
     plt.close('all')
     return (data1, list(accdist)[-1], active.distance.median())
@@ -127,8 +131,7 @@ def CalcDuration(df, window, thresholdDist=1, thresholdActive=0.95):
 
 
 def plotDuration(dfDur, dfDist):
-    plt.figure(figsize=(3,1))
-    sns.displot(dfDur.duration)
+    sns.displot(data=dfDur, x='duration', color= 'gray', height=2, aspect=3, kde=True)
     plt.savefig('{}_duration_distplot_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
     plt.close('all')
     listDur = dfDist.Slice.values
@@ -136,10 +139,12 @@ def plotDuration(dfDur, dfDist):
     for i in dfDur.index:
         activeTimePoint += list(np.arange(dfDur.loc[i, 'start'], dfDur.loc[i, 'end']))
     plotDur = [1 if i in activeTimePoint else 0 for i in listDur]
-    plt.figure(figsize=(3,2))
-    _, axs = plt.subplots(nrows=2, ncols=1, figsize=(args.segment+1, 1))
+    plt.figure(figsize=(6,2))
+    _, axs = plt.subplots(nrows=2, ncols=1, figsize=(args.segment+1, 1), sharex=True, gridspec_kw={'height_ratios':[3,1]})
     plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0)
     axs[0].scatter('Slice', 'distance', data=dfDist, s=0.1, alpha=0.5, c="gray")
+    axs[0].set_xlim(0,20)
+    axs[0].set_ylim(listDur.min(), listDur.max())
     sns.lineplot(x=dfDist.Slice, y=plotDur, drawstyle='steps-pre', color='gray', linewidth=1, ax=axs[1])
     axs[1].fill_between(x=dfDist.Slice, y1=plotDur, color='gray', step='pre')
     sns.despine()
@@ -152,13 +157,18 @@ def AnalyzeData(df):
     merged = mergePoints(df)
     dfDist, totalDist, medSpeed = DistantCalc(merged)
     dfDur = CalcDuration(dfDist, args.window)
-    if len(dfDur) > 0:
+    if len(dfDur) > 1:
         medDur = plotDuration(dfDur, dfDist)
     else:
         medDur = 0
     if args.segment > 0:
         CalcAreaChange(dfDist, args.segment_edge_length)
     return '\t'.join([df['id'].iloc[0], str(totalDist), str(medSpeed), str(medDur), str(len(dfDur))])+'\n', dfDist
+
+
+def plotTight(editable):
+    if editable:
+        plt.tight_layout()
 
 
 if __name__ == '__main__':
@@ -181,6 +191,7 @@ if __name__ == '__main__':
     parser.add_argument('--segment_edge_length', metavar='px', type=int, help='length of segment square', default=-1)
     parser.add_argument('--window', metavar='frames', type=int, help='seed window for duration analysis', default=10)
     parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
+    parser.add_argument('--editable',  action='store_false', help='figures are made suitable for editing later')
     args = parser.parse_args()
 
     #----------------------# Tracking #----------------------#
@@ -266,7 +277,7 @@ if __name__ == '__main__':
     totalSlice = startSlice
 
     #----------------------# Analyzing #----------------------#
-    #warnings.simplefilter('error')
+    warnings.simplefilter('ignore', category='FutureWarning')
     print("Start border determination...")
     xborder, yborder = defineBorders(df)
     merged_list = []
