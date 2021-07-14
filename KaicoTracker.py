@@ -215,6 +215,7 @@ if __name__ == '__main__':
     parser.add_argument('--trackingResult', type=str, metavar='file', help='Path to output files of Tracking. If not specified, {prefix}.txt', default=None)
     parser.add_argument('--fps', metavar='FPS', type=int, help='output FPS', default=-1)
     parser.add_argument('--analysis_range', metavar='range', nargs=2, type=int, help='a range of frames to be analyzed', default=(0, -1))
+    parser.add_argument('--autoCrop', action='store_true', help='turning on autoCrop, default=False')
     parser.add_argument('--top', metavar='px', type=int, help='top position of frame', default=-1)
     parser.add_argument('--bottom', metavar='px', type=int, help='bottom position of frame', default=0)
     parser.add_argument('--left', metavar='px', type=int, help='left position of frame', default=0)
@@ -227,6 +228,12 @@ if __name__ == '__main__':
 
     #----------------------# Tracking #----------------------#
     if not args.skipTracking:
+        if args.autoCrop:
+            totalSlice = 0
+            for inCap in args.input:
+                capture, fcount = startCapture(inCap)
+                totalSlice += fcount
+            
         if args.algo == 'KNN':
             backSub = cv.createBackgroundSubtractorKNN()
         else:
@@ -237,7 +244,6 @@ if __name__ == '__main__':
         for inCap in args.input:
             capture, fcount = startCapture(inCap)
             top, right = setCropArea(capture)
-            
             dfs =[]
             print("Start Tracking...")
             with tqdm.tqdm(total=fcount) as pbar:
@@ -245,19 +251,19 @@ if __name__ == '__main__':
                     ret, frame = capture.read()
                     if frame is None:
                         break
-                    pbar.update(1)
                     frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES)) + startSlice
 
-                    # cropping & background subtraction & blurring foreground
+                    # cropping & background subtraction & blurring foreground & contour detection
                     frameCropped = frame[args.bottom: top, args.left: right]
                     fgMask = backSub.apply(frameCropped, learningRate=args.learningRate)
                     fgMaskBlur = cv.blur(fgMask, (args.blurringSquare, args.blurringSquare))
+                    canny_output = cv.Canny(fgMaskBlur, 100, 100 * 2)
+                    contours, hierarchy = cv.findContours(canny_output, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
 
                     # display current frame #
                     cv.rectangle(frameCropped, (10, 2), (100,20), (255,255,255), -1)
                     cv.putText(frameCropped, str(frame_num), (15, 15), cv.FONT_HERSHEY_SIMPLEX, 0.5 , (0,0,0))
-                    canny_output = cv.Canny(fgMaskBlur, 100, 100 * 2)
-                    contours, hierarchy = cv.findContours(canny_output, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+                    
                     # Draw contours
                     drawing = np.zeros((frameCropped.shape[0], frameCropped.shape[1], 3), dtype=np.uint8)
                     approxContours = []
@@ -287,6 +293,8 @@ if __name__ == '__main__':
                     keyboard = cv.waitKey(30)
                     if keyboard == 'q' or keyboard == 27:
                         break
+                    pbar.update(1)
+
             df_temp = pd.concat(dfs, sort=False)
             df_temp["file"] = inCap
             df_captures.append(df_temp)
