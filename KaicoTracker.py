@@ -1,5 +1,7 @@
 from __future__ import print_function
 import sys
+import warnings
+import argparse
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
@@ -7,10 +9,8 @@ import scipy.signal as signal
 from matplotlib import pyplot as plt
 import seaborn as sns
 import cv2 as cv
-import argparse
 import tqdm
 import itertools
-import warnings
 
 
 def startCapture(inCap):
@@ -20,6 +20,7 @@ def startCapture(inCap):
         print('Unable to open: ' + inCap)
         exit(0)
     return capture, fcount
+
 
 def setCropArea(capture):
     if args.top < 0:
@@ -32,6 +33,13 @@ def setCropArea(capture):
         right = args.right
     return top, right
 
+
+def subBack(frame):
+    fgMask = backSub.apply(frame, learningRate=args.learningRate)
+    fgMaskBlur = cv.blur(fgMask, (args.blurringSquare, args.blurringSquare))
+    canny_output = cv.Canny(fgMaskBlur, 100, 100 * 2)
+    contours, hierarchy = cv.findContours(canny_output, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+    return fgMaskBlur, contours, hierarchy
 
 def defineBorders(df):
     borders = {}
@@ -144,17 +152,21 @@ def CalcDuration(df, window, thresholdDist=1, thresholdActive=0.95):
         if (temp.distance.mean() > thresholdDist) & (activeRatio > thresholdActive):
             ext += 1
         elif ext > 1:
-            dfLine = pd.DataFrame({'start':ind+1, 'end':ind + window + ext, 'duration':window + ext}, index=[ind+1])
+            dfLine = pd.DataFrame({'start':ind+1, 'end':ind + window + ext, 'duration':window + ext, 'id': df['id'].iloc[0]}, index=[ind+1])
             dfs.append(dfLine)
-            ind = ind + window
+            ind = ind + window + ext
             ext = 0
         else:
             ind += 1
+    if ext > 1:
+        dfLine = pd.DataFrame({'start':ind+1, 'end':ind + window + ext, 'duration':window + ext, 'id': df['id'].iloc[0]}, index=[ind+1])
+        dfs.append(dfLine)
     if len(dfs) > 0:
         oDf = pd.concat(dfs, sort=False, ignore_index=True)
         return oDf
     else:
-        return dfs
+        emptyDf = pd.DataFrame({'start':0, 'end':0, 'duration':0, 'id': df['id'].iloc[0]}, index=[ind+1])
+        return emptyDf
 
 
 def plotDuration(dfDur, dfDist):
@@ -167,21 +179,30 @@ def plotDuration(dfDur, dfDist):
     for i in dfDur.index:
         activeTimePoint += list(np.arange(dfDur.loc[i, 'start'], dfDur.loc[i, 'end']))
     plotDur = [1 if i in activeTimePoint else 0 for i in listDur]
-    plt.figure(figsize=(6,2))
-    _, axs = plt.subplots(nrows=2, ncols=1, figsize=(args.segment+1, 1), sharex=True, gridspec_kw={'height_ratios':[3,1]})
-    plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0)
+    trange = (listDur.max() - listDur.min()) // args.segment
+    _, axs = plt.subplots(nrows=2, ncols=1, figsize=(args.segment+1, 2), gridspec_kw={'height_ratios':[3,1]})
+    if args.format == 'png':
+        plt.subplots_adjust(wspace=0, hspace=0.1)
+    else:
+        plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0.1)
     axs[0].scatter('Slice', 'distance', data=dfDist, s=0.1, alpha=0.5, c="gray")
     axs[0].set_ylim(0,20)
     axs[0].set_xlim(listDur.min(), listDur.max())
+    axs[0].set_xticks([])
     sns.lineplot(x=dfDist.Slice, y=plotDur, drawstyle='steps-pre', color='gray', linewidth=1, ax=axs[1])
     axs[1].fill_between(x=dfDist.Slice, y1=plotDur, color='gray', step='pre')
+    axs[1].set_xlim(listDur.min(), listDur.max())
+    axs[1].set_ylim(0,1)
+    axs[1].set_yticks([])
+    axs[1].set_xticks(range(0, listDur.max()-listDur.min(), trange))
+    axs[1].set_xticklabels([i*args.lapse for i in range(0, listDur.max()-listDur.min(), trange)])
     sns.despine()
     plt.savefig('{}_locomotion_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
     plt.close('all')
     return dfDur.duration.median()
 
 
-def AnalyzeData(df):
+def AnalyzeData(df): 
     merged = mergePoints(df)
     dfDist, totalDist, medSpeed = DistantCalc(merged)
     dfDur = CalcDuration(dfDist, args.window)
@@ -191,7 +212,7 @@ def AnalyzeData(df):
         medDur = 0
     if args.segment > 0:
         CalcAreaChange(dfDist, args.segment_edge_length)
-    return '\t'.join([df['id'].iloc[0], str(totalDist), str(medSpeed), str(medDur), str(len(dfDur))])+'\n', dfDist
+    return '\t'.join([df['id'].iloc[0], str(totalDist), str(medSpeed), str(medDur), str(len(dfDur))])+'\n', dfDist, dfDur
 
 
 def plotTight(oFormat):
@@ -207,6 +228,7 @@ if __name__ == '__main__':
     parser.add_argument('--algo', type=str, help='Background subtraction method.', default='KNN', choices=['MOG2', 'KNN'])
     parser.add_argument('--learningRate', metavar='float', type=float, help='Learning Rate for applied method', default=-1)
     parser.add_argument('--blurringSquare', metavar='length', type=int, help='Edge length of blurring square', default=10)
+    parser.add_argument('--lapse', metavar='seconds', type=int, help='Time-lapse interval', default=3)
     parser.add_argument('--live', action='store_true', help='Display processing movie, default=False')
     parser.add_argument('--noPoint', action='store_false', help='Pointing stage will be skipped, default=True')
     parser.add_argument('--onlyTracking', action='store_true', help='Only tracking stage will be done, default=False')
@@ -215,7 +237,7 @@ if __name__ == '__main__':
     parser.add_argument('--trackingResult', type=str, metavar='file', help='Path to output files of Tracking. If not specified, {prefix}.txt', default=None)
     parser.add_argument('--fps', metavar='FPS', type=int, help='output FPS', default=-1)
     parser.add_argument('--analysis_range', metavar='range', nargs=2, type=int, help='a range of frames to be analyzed', default=(0, -1))
-    parser.add_argument('--autoCrop', action='store_true', help='turning on autoCrop, default=False')
+    parser.add_argument('--autoCrop', type=int, nargs=2, help='set rows and coloumns or cropping, set -1 for non-specified', default=(-1, -1))
     parser.add_argument('--top', metavar='px', type=int, help='top position of frame', default=-1)
     parser.add_argument('--bottom', metavar='px', type=int, help='bottom position of frame', default=0)
     parser.add_argument('--left', metavar='px', type=int, help='left position of frame', default=0)
@@ -226,14 +248,48 @@ if __name__ == '__main__':
     parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
     args = parser.parse_args()
 
+    #----------------------# Pre-analysis for autocrop #----------------------#
+    if args.autoCrop != (-1, -1):
+        if args.algo == 'KNN':
+            backSub = cv.createBackgroundSubtractorKNN()
+        else:
+            backSub = cv.createBackgroundSubtractorMOG2()
+        backSub.setDetectShadows(False)
+        print('Pre-analysis for autocrop')
+        totalSlice = 0
+        capture, fcount = startCapture(args.input[0])
+        dfs =[]
+        while True:
+            ret, frame = capture.read()
+            frame_num = cv.CAP_PROP_POS_FRAMES
+            if (frame is None) | (capture.get(cv.CAP_PROP_POS_FRAMES) > min(1000, fcount)):
+                break
+            fgMaskBlur, contours, hierarchy = subBack(frame)
+            for i in contours:
+                # Minimum Enclosing Circle
+                (x,y),radius = cv.minEnclosingCircle(i)
+                center = (int(x),int(y))
+                radius = int(radius)
+                # make DataFrame row
+                d = {'Slice': [int(frame_num)], 'XM': [int(x)], "YM": [int(y)], 'radius': [int(radius)]}
+                dfs.append(pd.DataFrame(data=d, index=[0]))
+        df = pd.concat(dfs, ignore_index=True, sort=False)
+        borders = {}
+        for i in ['XM', 'YM']:
+            Slices = np.linspace(1, int(df[i].max()), num=int(df[i].max()))
+            kernel = stats.gaussian_kde(df[i])
+            estimates = kernel(Slices)
+            mins = signal.argrelmin(estimates)[0].tolist()
+            maxs = signal.argrelmax(estimates)[0].tolist()
+            borders[i+'min'] = mins
+            borders[i+'max'] = maxs
+        xborder, yborder = defineBorders(df)
+
     #----------------------# Tracking #----------------------#
-    if not args.skipTracking:
-        if args.autoCrop:
-            totalSlice = 0
-            for inCap in args.input:
-                capture, fcount = startCapture(inCap)
-                totalSlice += fcount
-            
+    if args.skipTracking:
+        print('Tracking stage was skipped')
+    else:
+        print("Start Tracking...")         
         if args.algo == 'KNN':
             backSub = cv.createBackgroundSubtractorKNN()
         else:
@@ -242,10 +298,10 @@ if __name__ == '__main__':
         df_captures = []
         startSlice = 0
         for inCap in args.input:
+            print("Video {}".format(str(args.input.index(inCap)))) 
             capture, fcount = startCapture(inCap)
             top, right = setCropArea(capture)
             dfs =[]
-            print("Start Tracking...")
             with tqdm.tqdm(total=fcount) as pbar:
                 while True:
                     ret, frame = capture.read()
@@ -255,10 +311,7 @@ if __name__ == '__main__':
 
                     # cropping & background subtraction & blurring foreground & contour detection
                     frameCropped = frame[args.bottom: top, args.left: right]
-                    fgMask = backSub.apply(frameCropped, learningRate=args.learningRate)
-                    fgMaskBlur = cv.blur(fgMask, (args.blurringSquare, args.blurringSquare))
-                    canny_output = cv.Canny(fgMaskBlur, 100, 100 * 2)
-                    contours, hierarchy = cv.findContours(canny_output, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+                    fgMaskBlur, contours, hierarchy = subBack(frameCropped)
 
                     # display current frame #
                     cv.rectangle(frameCropped, (10, 2), (100,20), (255,255,255), -1)
@@ -314,9 +367,8 @@ if __name__ == '__main__':
         else:
             df = pd.read_csv(args.trackingResult, sep='\t')
     warnings.simplefilter('ignore', category='FutureWarning')
-    print("Start border determination...")
+    #print("Start border determination...")
     xborder, yborder = defineBorders(df)
-    merged_list = []
     print("Start analyzing...")
     # Distant calculation
     sepList = []
@@ -341,14 +393,17 @@ if __name__ == '__main__':
             pbar.update(1)
     print("Start Calculating...")
     oLines = []
+    merged_list = []
+    Durations = []
     with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
         for i in sepList:
             if len(i) == 0:
                 pbar.update(1)
                 continue
-            oLine, oDfDist = AnalyzeData(i)
+            oLine, oDfDist, dfDur = AnalyzeData(i)
             oLines.append(oLine)
             merged_list.append(oDfDist)
+            Durations.append(dfDur)
             pbar.update(1)
     with open('{}_dist_data.txt'.format(args.prefix), "w") as outDist:
         outDist.write('\t'.join(["id", "total_distance", "median_speed", "median_duration", "frequency"])+'\n')
@@ -356,6 +411,8 @@ if __name__ == '__main__':
             outDist.write(i)
     dfMerged = pd.concat(merged_list, axis=0, sort=False, ignore_index=True)
     dfMerged.to_csv('{}_positions.txt'.format(args.prefix), sep='\t', index=False)
+    durMerged = pd.concat(Durations, axis=0, sort=False, ignore_index=True)
+    durMerged.to_csv('{}_durations.txt'.format(args.prefix), sep='\t', index=False)
     plt.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
     plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
     plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
