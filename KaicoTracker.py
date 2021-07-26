@@ -22,6 +22,44 @@ def startCapture(inCap):
     return capture, fcount
 
 
+def autoCrop(capture):
+    dfs =[]
+    while True:
+        _, frame = capture.read()
+        frame_num = cv.CAP_PROP_POS_FRAMES
+        if (frame is None) | (capture.get(cv.CAP_PROP_POS_FRAMES) > min(args.autoCropPreAnalysis, fcount)):
+            break
+        _, contours, _ = subBack(frame)
+        for i in contours:
+            # Minimum Enclosing Circle
+            (x,y),radius = cv.minEnclosingCircle(i)
+            # make DataFrame row
+            d = {'Slice': [int(frame_num)], 'XM': [int(x)], "YM": [int(y)], 'radius': [int(radius)]}
+            dfs.append(pd.DataFrame(data=d, index=[0]))
+    df = pd.concat(dfs, ignore_index=True, sort=False)
+    cropBorders = {}
+    for i in ['XM', 'YM']:
+        Slices = np.linspace(1, int(df[i].max()), num=int(df[i].max()))
+        kernel = stats.gaussian_kde(df[i])
+        estimates = kernel(Slices)
+        if i == 'XM':
+            endVal = capture.get(cv.CAP_PROP_FRAME_WIDTH)
+            div = max(args.autoCrop[0], 1)
+        else:
+            endVal = capture.get(cv.CAP_PROP_FRAME_HEIGHT)
+            div = max(args.autoCrop[1], 1)
+        mins = [0] + [int(i) for i in signal.argrelmin(estimates)[0].tolist()] + [int(endVal)]
+        if len(mins) > div + 1: 
+            startsList = mins[:-div]
+            endsList = mins[div:]
+            frameMatrix = pd.DataFrame({'start': startsList, 'end': endsList, 'count': [len(df[(df[i]>startsList[j]) & (df[i]<endsList[j])]) for j in range(0, len(mins)-div)]})
+            cropBorders[i] = (frameMatrix.loc[frameMatrix['count'].idxmax(), 'start'], frameMatrix.loc[frameMatrix['count'].idxmax(), 'end'])
+        else:
+            cropBorders[i] = (0, int(endVal))
+    print(cropBorders)
+    return cropBorders['XM'], cropBorders['YM']
+
+
 def setCropArea(capture):
     if args.top < 0:
         top = int(capture.get(cv.CAP_PROP_FRAME_HEIGHT))
@@ -220,8 +258,10 @@ def plotTight(oFormat):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='This program shows how to use background subtraction methods provided by \
-                                                OpenCV. You can process both videos and images.')
+    parser = argparse.ArgumentParser(description='This program consitutes of three steps, \
+                                                    tracking learval movements from video, \
+                                                    analyzing tracking data and calculate each locomotory parameter, \
+                                                    pointing the larval position onto the original video (confirmation of result)')
     parser.add_argument('--input', type=str, metavar='file', nargs='+', help='Path to a video or a sequence of image.', default=['vtest.avi'])
     parser.add_argument('--prefix', type=str, metavar='prefix', help='Prefix of path to output files.', default='stdout')
     parser.add_argument('--algo', type=str, help='Background subtraction method.', default='KNN', choices=['MOG2', 'KNN'])
@@ -236,7 +276,8 @@ if __name__ == '__main__':
     parser.add_argument('--trackingResult', type=str, metavar='file', help='Path to output files of Tracking. If not specified, {prefix}.txt', default=None)
     parser.add_argument('--fps', metavar='FPS', type=int, help='output FPS', default=-1)
     parser.add_argument('--analysis_range', metavar='range', nargs=2, type=int, help='a range of frames to be analyzed', default=(0, -1))
-    parser.add_argument('--autoCrop', type=int, nargs=2, help='set rows and coloumns or cropping, set -1 for non-specified', default=(-1, -1))
+    parser.add_argument('--autoCrop', type=int, metavar='columns, rows', nargs=2, help='set coloumns and rows for cropping, set -1 for non-specified', default=(-1, -1))
+    parser.add_argument('--autoCropPreAnalysis', metavar='Preanalyezed_frames', type=int, help='the number of preanalyzed frames', default=1000)
     parser.add_argument('--top', metavar='px', type=int, help='top position of frame', default=-1)
     parser.add_argument('--bottom', metavar='px', type=int, help='bottom position of frame', default=0)
     parser.add_argument('--left', metavar='px', type=int, help='left position of frame', default=0)
@@ -247,53 +288,24 @@ if __name__ == '__main__':
     parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
     args = parser.parse_args()
 
-    #----------------------# Pre-analysis for autocrop #----------------------#
-    if args.autoCrop != (-1, -1):
-        if args.algo == 'KNN':
-            backSub = cv.createBackgroundSubtractorKNN()
-        else:
-            backSub = cv.createBackgroundSubtractorMOG2()
-        backSub.setDetectShadows(False)
-        print('Pre-analysis for autocrop')
-        totalSlice = 0
-        capture, fcount = startCapture(args.input[0])
-        dfs =[]
-        while True:
-            ret, frame = capture.read()
-            frame_num = cv.CAP_PROP_POS_FRAMES
-            if (frame is None) | (capture.get(cv.CAP_PROP_POS_FRAMES) > min(1000, fcount)):
-                break
-            fgMaskBlur, contours, hierarchy = subBack(frame)
-            for i in contours:
-                # Minimum Enclosing Circle
-                (x,y),radius = cv.minEnclosingCircle(i)
-                center = (int(x),int(y))
-                radius = int(radius)
-                # make DataFrame row
-                d = {'Slice': [int(frame_num)], 'XM': [int(x)], "YM": [int(y)], 'radius': [int(radius)]}
-                dfs.append(pd.DataFrame(data=d, index=[0]))
-        df = pd.concat(dfs, ignore_index=True, sort=False)
-        borders = {}
-        for i in ['XM', 'YM']:
-            Slices = np.linspace(1, int(df[i].max()), num=int(df[i].max()))
-            kernel = stats.gaussian_kde(df[i])
-            estimates = kernel(Slices)
-            mins = signal.argrelmin(estimates)[0].tolist()
-            maxs = signal.argrelmax(estimates)[0].tolist()
-            borders[i+'min'] = mins
-            borders[i+'max'] = maxs
-        xborder, yborder = defineBorders(df)
 
     #----------------------# Tracking #----------------------#
     if args.skipTracking:
         print('Tracking stage was skipped')
     else:
-        print("Start Tracking...")         
+        print("Start Tracking...")
         if args.algo == 'KNN':
             backSub = cv.createBackgroundSubtractorKNN()
         else:
             backSub = cv.createBackgroundSubtractorMOG2()
         backSub.setDetectShadows(False)
+        # Pre-analysis for autocrop
+        if args.autoCrop != (-1, -1):
+            print('Pre-analysis for autocrop')
+            totalSlice = 0
+            capture, fcount = startCapture(args.input[0])
+            xlims, ylims = autoCrop(capture)
+        
         df_captures = []
         startSlice = 0
         for inCap in args.input:
@@ -309,7 +321,10 @@ if __name__ == '__main__':
                     frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES)) + startSlice
 
                     # cropping & background subtraction & blurring foreground & contour detection
-                    frameCropped = frame[args.bottom: top, args.left: right]
+                    if args.autoCrop == (-1, -1):
+                        frameCropped = frame[args.bottom: top, args.left: right]
+                    else:
+                        frameCropped = frame[ylims[0]:ylims[1], xlims[0]:xlims[1]]
                     fgMaskBlur, contours, hierarchy = subBack(frameCropped)
 
                     # display current frame #
