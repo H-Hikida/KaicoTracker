@@ -7,6 +7,8 @@ import pandas as pd
 import scipy.stats as stats
 import scipy.signal as signal
 from matplotlib import pyplot as plt
+from matplotlib import patches as mpatches
+from matplotlib.collections import PatchCollection
 import seaborn as sns
 import cv2 as cv
 import tqdm
@@ -79,13 +81,19 @@ def subBack(frame):
     contours, hierarchy = cv.findContours(canny_output, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
     return fgMaskBlur, contours, hierarchy
 
+
+def defineKDE(df, columnName):
+    Slices = np.linspace(1, int(df[columnName].max()), num=int(df[columnName].max()))
+    kernel = stats.gaussian_kde(df[columnName])
+    estimates = kernel(Slices)
+    return signal.argrelmin(estimates)[0].tolist(), Slices, estimates
+
+
 def defineBorders(df):
     borders = {}
     for i in ['XM', 'YM']:
-        Slices = np.linspace(1, int(df[i].max()), num=int(df[i].max()))
-        kernel = stats.gaussian_kde(df[i])
-        estimates = kernel(Slices)
-        borders[i] = [0] + signal.argrelmin(estimates)[0].tolist() + [df[i].max()]
+        outL, Slices, estimates = defineKDE(df, i)
+        borders[i] = [0] + outL + [df[i].max()]
         plt.scatter(Slices, estimates, s=0.1, c="gray")
         ymin, ymax = plt.ylim()
         plt.vlines(borders[i], ymin=ymin, ymax=ymax, color='lightgray', zorder=1)
@@ -96,6 +104,26 @@ def defineBorders(df):
         plt.savefig('{}_{}_kde.{}'.format(args.prefix, i, args.format), format=args.format, dpi=200)
         plt.close('all')
     return borders['XM'], borders['YM']
+
+
+def adjustBorders(df, xborder, yborder):
+    newXborder = []
+    newYborder = []
+    for i in range(len(xborder)-1):
+        temp = df[(df['XM'] > xborder[i]) & (df['XM'] < xborder[i+1])]
+        outL, _, _ = defineKDE(temp, 'YM')
+        if len(outL) == len(yborder):
+            newYborder.append([0] + outL + [temp['YM'].max()])
+        else:
+            newYborder.append(yborder)
+    for i in range(len(yborder)-1):
+        temp = df[(df['YM'] > yborder[i]) & (df['YM'] < yborder[i+1])]
+        outL, _, _ = defineKDE(temp, 'XM')
+        if len(outL) == len(xborder):
+            newXborder.append([0] + outL + [temp['XM'].max()])
+        else:
+            newXborder.append(xborder)
+    return newXborder, newYborder
 
 
 def mergePoints(df):
@@ -273,6 +301,7 @@ if __name__ == '__main__':
     parser.add_argument('--onlyTracking', action='store_true', help='Only tracking stage will be done, default=False')
     parser.add_argument('--skipTracking', action='store_true', help='Skip tracking stage, default=False \
                                                                     --trackingResult should be specified.')
+    parser.add_argument('--easyBorder', action='store_true', help='If True, border determination was simplified, default=False')
     parser.add_argument('--trackingResult', type=str, metavar='file', help='Path to output files of Tracking. If not specified, {prefix}.txt', default=None)
     parser.add_argument('--fps', metavar='FPS', type=int, help='output FPS', default=-1)
     parser.add_argument('--analysis_range', metavar='range', nargs=2, type=int, help='a range of frames to be analyzed', default=(0, -1))
@@ -381,8 +410,6 @@ if __name__ == '__main__':
         else:
             df = pd.read_csv(args.trackingResult, sep='\t')
     warnings.simplefilter('ignore', category='FutureWarning')
-    #print("Start border determination...")
-    xborder, yborder = defineBorders(df)
     print("Start analyzing...")
     # Distant calculation
     sepList = []
@@ -393,23 +420,30 @@ if __name__ == '__main__':
         endAnalysis = df.Slice.max()
     dfAnalysis = df[(df.Slice > initialAnalysis) & (df.Slice < endAnalysis)]
     analysisRange = range(initialAnalysis+1, endAnalysis+1)
-    print("Start merging...")
-    with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
-        for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
+    # border determination
+    xborder, yborder = defineBorders(df)
+    if not args.easyBorder:
+        newXborder, newYborder = adjustBorders(df, xborder, yborder)
+    for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
+        if args.easyBorder:
             cBottom = yborder[j]
             cTop = yborder[j+1]
             cLeft = xborder[i]
             cRight = xborder[i+1]
-            area_id = '{}_{}_{}_{}'.format(cLeft, cRight, cBottom, cTop)
-            temp = dfAnalysis[(dfAnalysis.XM > cLeft) & (dfAnalysis.XM < cRight) & (dfAnalysis.YM > cBottom) & (dfAnalysis.YM < cTop)].copy()
-            temp['id'] = area_id
-            sepList.append(temp)
-            pbar.update(1)
+        else:
+            cBottom = newYborder[i][j]
+            cTop = newYborder[i][j+1]
+            cLeft = newXborder[j][i]
+            cRight = newXborder[j][i+1]
+        area_id = '{}_{}_{}_{}'.format(cLeft, cRight, cBottom, cTop)
+        temp = dfAnalysis[(dfAnalysis.XM > cLeft) & (dfAnalysis.XM < cRight) & (dfAnalysis.YM > cBottom) & (dfAnalysis.YM < cTop)].copy()
+        temp['id'] = area_id
+        sepList.append(temp)
     print("Start Calculating...")
     oLines = []
     merged_list = []
     Durations = []
-    with tqdm.tqdm(total=(len(xborder)-1)*(len(yborder)-1)) as pbar:
+    with tqdm.tqdm(total=len(sepList)) as pbar:
         for i in sepList:
             if len(i) == 0:
                 pbar.update(1)
@@ -427,9 +461,22 @@ if __name__ == '__main__':
     dfMerged.to_csv('{}_positions.txt'.format(args.prefix), sep='\t', index=False)
     durMerged = pd.concat(Durations, axis=0, sort=False, ignore_index=True)
     durMerged.to_csv('{}_durations.txt'.format(args.prefix), sep='\t', index=False)
-    plt.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
-    plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
-    plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
+    _, ax = plt.subplots()
+    ax.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
+    if args.easyBorder:
+        plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
+        plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
+    else:
+        rects = []
+        for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
+            cBottom = newYborder[i][j]
+            cHeight = newYborder[i][j+1] - newYborder[i][j]
+            cLeft = newXborder[j][i]
+            cWidth = newXborder[j][i+1] - newXborder[j][i]
+            rect = mpatches.Rectangle((cLeft, cBottom), width=cWidth, height=cHeight, fill=True)
+            rects.append(rect)
+        collection = PatchCollection(rects, alpha=0.2, color='lightgray')
+        ax.add_collection(collection)
     plt.savefig('{}_positions.{}'.format(args.prefix, args.format), format=args.format, dpi=200)
     plt.close('all')
 
