@@ -11,8 +11,15 @@ from matplotlib import patches as mpatches
 from matplotlib.collections import PatchCollection
 import seaborn as sns
 import cv2 as cv
-import tqdm
 import itertools
+
+
+def printCounter(c, total, progress):
+    if c*100//total > progress:
+        print('{}% Done'.format(str(progress)))
+        progress += 10
+    c += 1
+    return c, progress
 
 
 def startCapture(inCap):
@@ -26,11 +33,15 @@ def startCapture(inCap):
 
 def autoCrop(capture):
     dfs =[]
+    processFrames = min(args.autoCropPreAnalysis, fcount)
+    print('Tracking {} frames'.format(str(processFrames)))
+    c, progress = 0, 10
     while True:
         _, frame = capture.read()
-        frame_num = cv.CAP_PROP_POS_FRAMES
-        if (frame is None) | (capture.get(cv.CAP_PROP_POS_FRAMES) > min(args.autoCropPreAnalysis, fcount)):
+        if (frame is None) | (capture.get(cv.CAP_PROP_POS_FRAMES) > processFrames):
             break
+        frame_num = cv.CAP_PROP_POS_FRAMES
+        c, progress = printCounter(c, processFrames, progress)
         _, contours, _ = subBack(frame)
         for i in contours:
             # Minimum Enclosing Circle
@@ -38,6 +49,8 @@ def autoCrop(capture):
             # make DataFrame row
             d = {'Slice': [int(frame_num)], 'XM': [int(x)], "YM": [int(y)], 'radius': [int(radius)]}
             dfs.append(pd.DataFrame(data=d, index=[0]))
+    print('100% Done, Completed!')
+    print('Determing borders..')
     df = pd.concat(dfs, ignore_index=True, sort=False)
     cropBorders = {}
     for i in ['XM', 'YM']:
@@ -58,7 +71,6 @@ def autoCrop(capture):
             cropBorders[i] = (frameMatrix.loc[frameMatrix['count'].idxmax(), 'start'], frameMatrix.loc[frameMatrix['count'].idxmax(), 'end'])
         else:
             cropBorders[i] = (0, int(endVal))
-    print(cropBorders)
     return cropBorders['XM'], cropBorders['YM']
 
 
@@ -252,15 +264,15 @@ def plotDuration(dfDur, dfDist):
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0.1)
     axs[0].scatter('Slice', 'distance', data=dfDist, s=0.1, alpha=0.5, c="gray")
     axs[0].set_ylim(0,20)
-    axs[0].set_xlim(listDur.min(), listDur.max())
     axs[0].set_xticks([])
+    axs[0].set_xlim(listDur.min(), listDur.max())
     sns.lineplot(x=dfDist.Slice, y=plotDur, drawstyle='steps-pre', color='gray', linewidth=1, ax=axs[1])
     axs[1].fill_between(x=dfDist.Slice, y1=plotDur, color='gray', step='pre')
-    axs[1].set_xlim(listDur.min(), listDur.max())
     axs[1].set_ylim(0,1)
     axs[1].set_yticks([])
     axs[1].set_xticks(range(0, listDur.max()-listDur.min(), args.segment))
     axs[1].set_xticklabels([i*args.lapse for i in range(0, listDur.max()-listDur.min(), args.segment)])
+    axs[1].set_xlim(listDur.min(), listDur.max())
     sns.despine()
     plt.savefig('{}_locomotion_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
     plt.close('all')
@@ -322,7 +334,6 @@ if __name__ == '__main__':
     if args.skipTracking:
         print('Tracking stage was skipped')
     else:
-        print("Start Tracking...")
         if args.algo == 'KNN':
             backSub = cv.createBackgroundSubtractorKNN()
         else:
@@ -335,62 +346,65 @@ if __name__ == '__main__':
             capture, fcount = startCapture(args.input[0])
             xlims, ylims = autoCrop(capture)
         
+        print('Start Tracking')
+
         df_captures = []
         startSlice = 0
         for inCap in args.input:
-            print("Video {}".format(str(args.input.index(inCap)))) 
+            print("Video {}".format(str(args.input.index(inCap)+1))) 
             capture, fcount = startCapture(inCap)
             top, right = setCropArea(capture)
             dfs =[]
-            with tqdm.tqdm(total=fcount) as pbar:
-                while True:
-                    ret, frame = capture.read()
-                    if frame is None:
-                        break
-                    frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES)) + startSlice
+            c, progress = 0, 10
+            while True:
+                ret, frame = capture.read()
+                if frame is None:
+                    break
+                frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES)) + startSlice
+                c, progress = printCounter(c, fcount, progress)
 
-                    # cropping & background subtraction & blurring foreground & contour detection
-                    if args.autoCrop == (-1, -1):
-                        frameCropped = frame[args.bottom: top, args.left: right]
-                    else:
-                        frameCropped = frame[ylims[0]:ylims[1], xlims[0]:xlims[1]]
-                    fgMaskBlur, contours, hierarchy = subBack(frameCropped)
+                # cropping & background subtraction & blurring foreground & contour detection
+                if args.autoCrop == (-1, -1):
+                    frameCropped = frame[args.bottom: top, args.left: right]
+                else:
+                    frameCropped = frame[ylims[0]:ylims[1], xlims[0]:xlims[1]]
+                fgMaskBlur, contours, hierarchy = subBack(frameCropped)
 
-                    # display current frame #
-                    cv.rectangle(frameCropped, (10, 2), (100,20), (255,255,255), -1)
-                    cv.putText(frameCropped, str(frame_num), (15, 15), cv.FONT_HERSHEY_SIMPLEX, 0.5 , (0,0,0))
+                # display current frame #
+                cv.rectangle(frameCropped, (10, 2), (100,20), (255,255,255), -1)
+                cv.putText(frameCropped, str(frame_num), (15, 15), cv.FONT_HERSHEY_SIMPLEX, 0.5 , (0,0,0))
+                
+                # Draw contours
+                drawing = np.zeros((frameCropped.shape[0], frameCropped.shape[1], 3), dtype=np.uint8)
+                approxContours = []
+                hullContours = []
+                for i in contours:
+                    # Contour Approximation
+                    epsilon = 0.01*cv.arcLength(i, True)
+                    approx = cv.approxPolyDP(i, epsilon, True)
+                    approxContours.append(approx)
+                    # Minimum Enclosing Circle
+                    (x,y),radius = cv.minEnclosingCircle(i)
+                    center = (int(x),int(y))
+                    radius = int(radius)
+                    cv.circle(drawing,center,radius,(0,0,255),2)
+                    # make DataFrame row
+                    d = {'Slice': [int(frame_num)], 'XM': [int(x)], "YM": [int(y)], 'radius': [int(radius)]}
+                    dfs.append(pd.DataFrame(data=d, index=[0]))
+                for i in range(len(approxContours)):
+                    cv.drawContours(drawing, approxContours, i, (255, 0, 0), 2, cv.LINE_8, hierarchy, 0)
                     
-                    # Draw contours
-                    drawing = np.zeros((frameCropped.shape[0], frameCropped.shape[1], 3), dtype=np.uint8)
-                    approxContours = []
-                    hullContours = []
-                    for i in contours:
-                        # Contour Approximation
-                        epsilon = 0.01*cv.arcLength(i, True)
-                        approx = cv.approxPolyDP(i, epsilon, True)
-                        approxContours.append(approx)
-                        # Minimum Enclosing Circle
-                        (x,y),radius = cv.minEnclosingCircle(i)
-                        center = (int(x),int(y))
-                        radius = int(radius)
-                        cv.circle(drawing,center,radius,(0,0,255),2)
-                        # make DataFrame row
-                        d = {'Slice': [int(frame_num)], 'XM': [int(x)], "YM": [int(y)], 'radius': [int(radius)]}
-                        dfs.append(pd.DataFrame(data=d, index=[0]))
-                    for i in range(len(approxContours)):
-                        cv.drawContours(drawing, approxContours, i, (255, 0, 0), 2, cv.LINE_8, hierarchy, 0)
-                        
-                    # diplay movie if --live flag is true
-                    if args.live:
-                        cv.imshow('Frame', frameCropped)
-                        cv.imshow('FG Mask blur', fgMaskBlur)
-                        cv.imshow('Contours', drawing)
-                    
-                    keyboard = cv.waitKey(30)
-                    if keyboard == 'q' or keyboard == 27:
-                        break
-                    pbar.update(1)
+                # diplay movie if --live flag is true
+                if args.live:
+                    cv.imshow('Frame', frameCropped)
+                    cv.imshow('FG Mask blur', fgMaskBlur)
+                    cv.imshow('Contours', drawing)
+                
+                keyboard = cv.waitKey(30)
+                if keyboard == 'q' or keyboard == 27:
+                    break
 
+            print('100% Done, Completed!')
             df_temp = pd.concat(dfs, sort=False)
             df_temp["file"] = inCap
             df_captures.append(df_temp)
@@ -443,16 +457,16 @@ if __name__ == '__main__':
     oLines = []
     merged_list = []
     Durations = []
-    with tqdm.tqdm(total=len(sepList)) as pbar:
-        for i in sepList:
-            if len(i) == 0:
-                pbar.update(1)
-                continue
-            oLine, oDfDist, dfDur = AnalyzeData(i)
-            oLines.append(oLine)
-            merged_list.append(oDfDist)
-            Durations.append(dfDur)
-            pbar.update(1)
+    c, progress = 0, 10
+    for i in sepList:
+        c, progress = printCounter(c, (len(xborder)-1)*(len(yborder)-1), progress)
+        if len(i) == 0:
+            continue
+        oLine, oDfDist, dfDur = AnalyzeData(i)
+        oLines.append(oLine)
+        merged_list.append(oDfDist)
+        Durations.append(dfDur)
+    print('100% Done, Completed!')
     with open('{}_dist_data.txt'.format(args.prefix), "w") as outDist:
         outDist.write('\t'.join(["id", "total_distance", "median_speed", "median_duration", "frequency"])+'\n')
         for i in oLines:
@@ -487,6 +501,7 @@ if __name__ == '__main__':
         startSlice = 0
         for inCap in args.input:
             capture, fcount = startCapture(inCap)
+            print("Video {}".format(str(args.input.index(inCap)+1))) 
             if args.fps < 0:
                 fps = capture.get(cv.CAP_PROP_FPS)
             else:
@@ -496,28 +511,29 @@ if __name__ == '__main__':
             oWidth = int((right-args.left) * 0.5)
             oHeight = int((top-args.bottom) * 0.5)
             outVideo = cv.VideoWriter("{}_pointed_{}".format(args.prefix, inCap.replace("avi", "mp4")), fourcc, fps, (oWidth, oHeight), isColor=False)
-            with tqdm.tqdm(total=fcount) as pbar:
-                while True:
-                    ret, frame = capture.read()
-                    if frame is None:
-                        break
-                    pbar.update(1)
-                    frame_num = startSlice + int(capture.get(cv.CAP_PROP_POS_FRAMES))
-                    frameCropped = frame[args.bottom: top, args.left: right]
-                    temp = dfMerged[(dfMerged['Slice'] == frame_num) & (dfMerged['file'] == inCap)]
-                    if len(temp) > 0:
-                        for i in temp.index:
-                            x = int(temp.loc[i, 'XM'])
-                            y = int(temp.loc[i, 'YM'])
-                            frameCropped = cv.circle(frameCropped, (x, y), 5, color=(0, 0, 255), thickness=-1)
-                    im_gray = cv.cvtColor(frameCropped, cv.COLOR_BGR2GRAY)
-                    if args.live:
-                        cv.imshow('outVideo', im_gray)
-                    outVideo.write(cv.resize(im_gray, dsize=(oWidth, oHeight)))
+            c, progress = 0, 10
+            while True:
+                ret, frame = capture.read()
+                if frame is None:
+                    break
+                c, progress = printCounter(c, fcount, progress)
+                frame_num = startSlice + int(capture.get(cv.CAP_PROP_POS_FRAMES))
+                frameCropped = frame[args.bottom: top, args.left: right]
+                temp = dfMerged[(dfMerged['Slice'] == frame_num) & (dfMerged['file'] == inCap)]
+                if len(temp) > 0:
+                    for i in temp.index:
+                        x = int(temp.loc[i, 'XM'])
+                        y = int(temp.loc[i, 'YM'])
+                        frameCropped = cv.circle(frameCropped, (x, y), 5, color=(0, 0, 255), thickness=-1)
+                im_gray = cv.cvtColor(frameCropped, cv.COLOR_BGR2GRAY)
+                if args.live:
+                    cv.imshow('outVideo', im_gray)
+                outVideo.write(cv.resize(im_gray, dsize=(oWidth, oHeight)))
 
-                    keyboard = cv.waitKey(30)
-                    if keyboard == 'q' or keyboard == 27:
-                        break
+                keyboard = cv.waitKey(30)
+                if keyboard == 'q' or keyboard == 27:
+                    break
             outVideo.release()
             startSlice += fcount
+            print('100% Done, Completed!')
         cv.destroyAllWindows()
