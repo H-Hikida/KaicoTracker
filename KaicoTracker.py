@@ -32,19 +32,16 @@ def startCapture(inCap):
     return capture, fcount
 
 
-def borderSelection(df, xlims, ylims, ncols, nrows):
-    xmin, xmax = xlims[0], xlims[1]
-    ymin, ymax = ylims[0], ylims[1]
+def borderSelection(df, ncols, nrows):
     cropBorders = {}
-    df = df[(df['XM'] > xmin) & (df['XM'] < xmax) & (df['YM'] > ymin) & (df['YM'] < ymax)].copy()
     for i in ['XM', 'YM']:
         if i == 'XM':
-            iniVal = int(xmin)
-            endVal = int(xmax)
+            iniVal = int(df['XM'].min())
+            endVal = int(df['XM'].max())
             div = ncols
         else:
-            iniVal = int(ymin)
-            endVal = int(ymax)
+            iniVal = int(df['YM'].min())
+            endVal = int(df['YM'].max())
             div = nrows
         if div < 0:
             cropBorders[i] = (int(iniVal), int(endVal))
@@ -52,11 +49,19 @@ def borderSelection(df, xlims, ylims, ncols, nrows):
         Slices = np.linspace(iniVal, endVal, num=endVal-iniVal)
         kernel = stats.gaussian_kde(df[i])
         estimates = kernel(Slices)
-        mins = [iniVal] + [int(i) for i in signal.argrelmin(estimates)[0].tolist() if (i > iniVal) & (i < endVal)] + [int(endVal)]
-        if len(mins) > div + 1: 
-            startsList = mins[:-div]
-            endsList = mins[div:]
-            frameMatrix = pd.DataFrame({'start': startsList, 'end': endsList, 'count': [len(df[(df[i]>startsList[j]) & (df[i]<endsList[j])]) for j in range(0, len(mins)-div)]})
+        mins = [iniVal] + [int(i) for i in signal.argrelmin(estimates)[0].tolist() if (i > iniVal) & (i < endVal)] + [endVal]
+        if len(mins) > div + 1:
+            volume = []
+            for j in range(len(mins)-1):
+                volume.append(len(df[(df[i] > mins[j]) & (df[i] < mins[j+1])]))
+            for j in range(1, len(volume)-1):
+                if (volume[j] < volume[j-1] * args.cropThreshold) & (volume[j] < volume[j+1] * args.cropThreshold):
+                    volume[j] = -1
+            volume += [1]
+            borders = [mins[j] for j in range(len(mins)) if volume[j] > 0]
+            startsList = borders[:-div]
+            endsList = borders[div:]
+            frameMatrix = pd.DataFrame({'start': startsList, 'end': endsList, 'count': [len(df[(df[i]>startsList[j]) & (df[i]<endsList[j])]) for j in range(0, len(borders)-div)]})
             cropBorders[i] = (frameMatrix.loc[frameMatrix['count'].idxmax(), 'start'], frameMatrix.loc[frameMatrix['count'].idxmax(), 'end'])
         else:
             cropBorders[i] = (int(iniVal), int(endVal))
@@ -84,7 +89,7 @@ def autoCrop(capture):
     print('100% Done, Completed!')
     print('Determing borders..')
     df = pd.concat(dfs, ignore_index=True, sort=False)
-    xlims, ylims = borderSelection(df, (0, capture.get(cv.CAP_PROP_FRAME_WIDTH)), (0, capture.get(cv.CAP_PROP_FRAME_HEIGHT)), ncols=args.autoCrop[0], nrows=args.autoCrop[1])
+    xlims, ylims = borderSelection(df, ncols=args.autoCrop[0], nrows=args.autoCrop[1])
     return xlims, ylims
 
 
@@ -182,9 +187,9 @@ def DistantCalc(data):
         time = data[data.Slice == i]
         if len(time) == 1:
             times.append(time)
-        elif (len(time) == 0) & (i > initialAnalysis+1):
-            times.append(times[(i-1)-1-initialAnalysis])
-        elif (len(time) == 0) & (i == initialAnalysis+1):
+        elif (len(time) == 0) & (i > initialAnalysis):
+            times.append(times[(i-1)-initialAnalysis])
+        elif (len(time) == 0) & (i == initialAnalysis):
             df_first = data[data.Slice == (i+1)]
             while(len(df_first) == 0):
                 i += 1
@@ -193,6 +198,7 @@ def DistantCalc(data):
     data1 = pd.concat(times, sort=False)
     data1.loc[:,'id'] = data['id'].iloc[0]
     data1.Slice = analysisRange
+    data1.index = analysisRange
     dist = np.sqrt(\
                    np.power(data1.XM.values[0:len(data1)-1]-data1.XM.values[1:len(data1)], 2)\
                    + np.power(data1.YM.values[0:len(data1)-1]-data1.YM.values[1:len(data1)], 2)\
@@ -245,39 +251,43 @@ def CalcAreaChange(df, length=-1):
     plt.close('all')
 
 
-def CalcDuration(df, window, thresholdDist=1, thresholdActive=0.95):
-    ind = 0
-    ext = 0
+def CalcDuration(inf, window, thresholdDist=1, thresholdActive=0.95):
     dfs = []
-    dfPosition = df.reset_index(drop=True)
+    aid = inf['id'].iloc[0]
+    dfPosition = inf.set_index('Slice', drop=True)
+    #print(dfPosition.index.min(), dfPosition.index.max(), '\n', dfPosition.head())
+    ind = dfPosition.index.min()
+    ext = 0
+    #print(dfPosition[28790:28810])
     while ind + window + ext < dfPosition.index.max():
-        temp = dfPosition[ind:ind + window + ext].reset_index(drop=True)
+        temp = dfPosition.loc[ind:ind + window + ext]
+        #if len(temp) == 0:
+        #    print(ind, window, ext)
         activeRatio = len([i for i in temp.index if temp.loc[i, 'distance'] > thresholdDist]) / len(temp)
         if (temp.distance.mean() > thresholdDist) & (activeRatio > thresholdActive):
             ext += 1
         elif ext > 1:
-            dfLine = pd.DataFrame({'start':ind+1, 'end':ind + window + ext, 'duration':window + ext, 'id': df['id'].iloc[0]}, index=[ind+1])
+            dfLine = pd.DataFrame({'start':ind+1, 'end':ind + window + ext, 'duration':window + ext, 'id': aid}, index=[ind+1])
             dfs.append(dfLine)
             ind = ind + window + ext
             ext = 0
         else:
             ind += 1
     if ext > 1:
-        dfLine = pd.DataFrame({'start':ind+1, 'end':ind + window + ext, 'duration':window + ext, 'id': df['id'].iloc[0]}, index=[ind+1])
+        dfLine = pd.DataFrame({'start':ind+1, 'end':ind + window + ext, 'duration':window + ext, 'id': aid}, index=[ind+1])
         dfs.append(dfLine)
     if len(dfs) > 0:
         oDf = pd.concat(dfs, sort=False, ignore_index=True)
         return oDf
     else:
-        emptyDf = pd.DataFrame({'start':0, 'end':0, 'duration':0, 'id': df['id'].iloc[0]}, index=[ind+1])
+        emptyDf = pd.DataFrame({'start':0, 'end':0, 'duration':0, 'id': aid}, index=[ind+1])
         return emptyDf
 
 
 def plotDuration(dfDur, dfDist):
-    if len(dfDur) > 1:
-        sns.displot(data=dfDur, x='duration', color= 'gray', height=2, aspect=3, kde=True)
-        plt.savefig('{}_duration_distplot_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
-        plt.close('all')
+    sns.displot(data=dfDur, x='duration', color= 'gray', height=2, aspect=3, kde=True)
+    plt.savefig('{}_duration_distplot_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
+    plt.close('all')
     listDur = dfDist.Slice.values
     activeTimePoint = []
     for i in dfDur.index:
@@ -285,10 +295,10 @@ def plotDuration(dfDur, dfDist):
     plotDur = [1 if i in activeTimePoint else 0 for i in listDur]
     _, axs = plt.subplots(nrows=2, ncols=1, figsize=(10, 1), gridspec_kw={'height_ratios':[4,1]})
     if args.format == 'png':
-        plt.subplots_adjust(wspace=0, hspace=0.1)
+        plt.subplots_adjust(wspace=0, hspace=0.1, bottom=0.25, left=0.03, right=0.99)
     else:
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0.1)
-    axs[0].scatter('Slice', 'distance', data=dfDist, s=0.1, alpha=0.5, c="gray")
+    axs[0].scatter(x=dfDist.Slice, y=dfDist.distance, data=dfDist, s=0.1, alpha=0.5, c="gray")
     axs[0].set_ylim(0,20)
     axs[0].set_xticks([])
     axs[0].set_xlim(listDur.min(), listDur.max())
@@ -296,6 +306,7 @@ def plotDuration(dfDur, dfDist):
     axs[1].fill_between(x=dfDist.Slice, y1=plotDur, color='gray', step='pre')
     axs[1].set_ylim(0,1)
     axs[1].set_yticks([])
+    axs[1].set_xlabel("")
     axs[1].set_xticks(range(0, listDur.max()-listDur.min(), args.segment))
     axs[1].set_xticklabels([i*args.lapse for i in range(0, listDur.max()-listDur.min(), args.segment)])
     axs[1].set_xlim(listDur.min(), listDur.max())
@@ -342,7 +353,7 @@ if __name__ == '__main__':
     parser.add_argument('--complexBorder', action='store_true', help='If True, complex border determination was turned on, default=False')
     parser.add_argument('--trackingResult', type=str, metavar='file', help='Path to output files of Tracking. If not specified, {prefix}.txt', default=None)
     parser.add_argument('--fps', metavar='FPS', type=int, help='output FPS', default=-1)
-    parser.add_argument('--analysis_range', metavar=('start', 'end'), nargs=2, type=int, help='a range of frames to be analyzed', default=(0, -1))
+    parser.add_argument('--analysis_range', metavar=('start', 'end'), nargs=2, type=int, help='a range of frames to be analyzed', default=(1, -1))
     parser.add_argument('--autoCrop', type=int, metavar=('columns', 'rows'), nargs=2, help='set coloumns and rows for cropping, set -1 for non-specified', default=(-1, -1))
     parser.add_argument('--autoCropPreAnalysis', metavar='Preanalyezed_frames', type=int, help='the number of preanalyzed frames', default=1000)
     parser.add_argument('--top', metavar='px', type=int, help='top position of frame', default=-1)
@@ -352,6 +363,7 @@ if __name__ == '__main__':
     parser.add_argument('--segment', metavar='int', type=int, help='the length of segment used for area segmentation', default=-1)
     parser.add_argument('--segment_edge_length', metavar='px', type=int, help='length of segment square', default=-1)
     parser.add_argument('--window', metavar='frames', type=int, help='seed window for duration analysis', default=10)
+    parser.add_argument('--cropThreshold', metavar='ratio', type=float, help='Threshold to cut inappropreate borders', default=0.01)
     parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
     args = parser.parse_args()
 
@@ -371,7 +383,7 @@ if __name__ == '__main__':
             totalSlice = 0
             capture, fcount = startCapture(args.input[0])
             xlims, ylims = autoCrop(capture)
-            print('Cropped into {} {} {} {}'.format(str(xlims[0]), str(xlims[1]), str(ylims[0]), str(ylims[1])))
+            print('Cropped into l{}, r{}, b{}, t{}'.format(str(xlims[0]), str(xlims[1]), str(ylims[0]), str(ylims[1])))
         
         print('Start Tracking')
 
@@ -460,16 +472,13 @@ if __name__ == '__main__':
     else:
         endAnalysis = df.Slice.max()
     dfAnalysis = df[(df.Slice > initialAnalysis) & (df.Slice < endAnalysis)]
-    analysisRange = range(initialAnalysis+1, endAnalysis+1)
+    analysisRange = range(initialAnalysis, endAnalysis)
     # border determination
-    if not args.complexBorder:
-        xborder, yborder = defineBorders(dfAnalysis)
-    else:
-        xlims = (dfAnalysis['XM'].min(), dfAnalysis['XM'].max())
-        ylims = (dfAnalysis['YM'].min(), dfAnalysis['YM'].max())
-        xlims, ylims = borderSelection(dfAnalysis, xlims, ylims, args.autoCrop[0], args.autoCrop[1])
-        dfAnalysis = dfAnalysis[(dfAnalysis['XM'] > xlims[0]) & (dfAnalysis['XM'] < xlims[1]) & (dfAnalysis['YM'] > ylims[0]) & (dfAnalysis['YM'] < ylims[1])]
-        xborder, yborder = defineBorders(dfAnalysis)
+    xlims, ylims = borderSelection(dfAnalysis, args.autoCrop[0], args.autoCrop[1])
+    print("Analysis is confined to l{}, r{}, b{}, t{}".format(xlims[0], xlims[1], ylims[0], ylims[1]))
+    dfAnalysis = dfAnalysis[(dfAnalysis['XM'] > xlims[0]) & (dfAnalysis['XM'] < xlims[1]) & (dfAnalysis['YM'] > ylims[0]) & (dfAnalysis['YM'] < ylims[1])]
+    xborder, yborder = defineBorders(dfAnalysis)
+    if args.complexBorder:
         newXborder, newYborder = adjustBorders(dfAnalysis, xborder, yborder)
     for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
         if not args.complexBorder:
@@ -512,7 +521,11 @@ if __name__ == '__main__':
     ax.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
     if not args.complexBorder:
         plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
+        ax.set_xticks(xborder)
+        ax.set_xticklabels(xborder)
         plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
+        ax.set_yticks(yborder)
+        ax.set_yticklabels(yborder)
     else:
         rects = []
         for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
@@ -543,7 +556,7 @@ if __name__ == '__main__':
             fourcc = cv.VideoWriter_fourcc('m','p','4', 'v')
             oWidth = int((right-args.left) * 0.5)
             oHeight = int((top-args.bottom) * 0.5)
-            outVideo = cv.VideoWriter("{}_pointed_{}".format(args.prefix, re.sub(r'avi', r'mp4', inCap, re.IGNORECASE)), fourcc, fps, (oWidth, oHeight), isColor=False)
+            outVideo = cv.VideoWriter("{}_pointed_{}.mp4".format(args.prefix, str(args.input.index(inCap)+1)), fourcc, fps, (oWidth, oHeight), isColor=False)
             c, progress = 0, 10
             while True:
                 ret, frame = capture.read()
