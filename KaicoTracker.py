@@ -1,5 +1,6 @@
 from __future__ import print_function
 import sys
+import re
 import warnings
 import argparse
 import numpy as np
@@ -31,6 +32,37 @@ def startCapture(inCap):
     return capture, fcount
 
 
+def borderSelection(df, xlims, ylims, ncols, nrows):
+    xmin, xmax = xlims[0], xlims[1]
+    ymin, ymax = ylims[0], ylims[1]
+    cropBorders = {}
+    df = df[(df['XM'] > xmin) & (df['XM'] < xmax) & (df['YM'] > ymin) & (df['YM'] < ymax)].copy()
+    for i in ['XM', 'YM']:
+        if i == 'XM':
+            iniVal = int(xmin)
+            endVal = int(xmax)
+            div = ncols
+        else:
+            iniVal = int(ymin)
+            endVal = int(ymax)
+            div = nrows
+        if div < 0:
+            cropBorders[i] = (int(iniVal), int(endVal))
+            continue
+        Slices = np.linspace(iniVal, endVal, num=endVal-iniVal)
+        kernel = stats.gaussian_kde(df[i])
+        estimates = kernel(Slices)
+        mins = [iniVal] + [int(i) for i in signal.argrelmin(estimates)[0].tolist() if (i > iniVal) & (i < endVal)] + [int(endVal)]
+        if len(mins) > div + 1: 
+            startsList = mins[:-div]
+            endsList = mins[div:]
+            frameMatrix = pd.DataFrame({'start': startsList, 'end': endsList, 'count': [len(df[(df[i]>startsList[j]) & (df[i]<endsList[j])]) for j in range(0, len(mins)-div)]})
+            cropBorders[i] = (frameMatrix.loc[frameMatrix['count'].idxmax(), 'start'], frameMatrix.loc[frameMatrix['count'].idxmax(), 'end'])
+        else:
+            cropBorders[i] = (int(iniVal), int(endVal))
+    return cropBorders['XM'], cropBorders['YM']
+
+
 def autoCrop(capture):
     dfs =[]
     processFrames = min(args.autoCropPreAnalysis, fcount)
@@ -52,34 +84,20 @@ def autoCrop(capture):
     print('100% Done, Completed!')
     print('Determing borders..')
     df = pd.concat(dfs, ignore_index=True, sort=False)
-    cropBorders = {}
-    for i in ['XM', 'YM']:
-        Slices = np.linspace(1, int(df[i].max()), num=int(df[i].max()))
-        kernel = stats.gaussian_kde(df[i])
-        estimates = kernel(Slices)
-        if i == 'XM':
-            endVal = capture.get(cv.CAP_PROP_FRAME_WIDTH)
-            div = max(args.autoCrop[0], 1)
-        else:
-            endVal = capture.get(cv.CAP_PROP_FRAME_HEIGHT)
-            div = max(args.autoCrop[1], 1)
-        mins = [0] + [int(i) for i in signal.argrelmin(estimates)[0].tolist()] + [int(endVal)]
-        if len(mins) > div + 1: 
-            startsList = mins[:-div]
-            endsList = mins[div:]
-            frameMatrix = pd.DataFrame({'start': startsList, 'end': endsList, 'count': [len(df[(df[i]>startsList[j]) & (df[i]<endsList[j])]) for j in range(0, len(mins)-div)]})
-            cropBorders[i] = (frameMatrix.loc[frameMatrix['count'].idxmax(), 'start'], frameMatrix.loc[frameMatrix['count'].idxmax(), 'end'])
-        else:
-            cropBorders[i] = (0, int(endVal))
-    return cropBorders['XM'], cropBorders['YM']
+    xlims, ylims = borderSelection(df, (0, capture.get(cv.CAP_PROP_FRAME_WIDTH)), (0, capture.get(cv.CAP_PROP_FRAME_HEIGHT)), ncols=args.autoCrop[0], nrows=args.autoCrop[1])
+    return xlims, ylims
 
 
 def setCropArea(capture):
-    if args.top < 0:
+    if args.autoCrop != (-1, -1):
+        top = ylims[1]
+    elif args.top < 0:
         top = int(capture.get(cv.CAP_PROP_FRAME_HEIGHT))
     else:
         top = args.top
-    if args.right < 0:
+    if args.autoCrop != (-1, -1):
+        right = xlims[1]
+    elif args.right < 0:
         right = int(capture.get(cv.CAP_PROP_FRAME_WIDTH))
     else:
         right = args.right
@@ -95,18 +113,20 @@ def subBack(frame):
 
 
 def defineKDE(df, columnName):
-    Slices = np.linspace(1, int(df[columnName].max()), num=int(df[columnName].max()))
+    smin = int(df[columnName].min())
+    smax = int(df[columnName].max())
+    Slices = np.linspace(smin, smax, num=smax-smin+1)
     kernel = stats.gaussian_kde(df[columnName])
     estimates = kernel(Slices)
-    return signal.argrelmin(estimates)[0].tolist(), Slices, estimates
+    return [smin] + [i + smin for i in signal.argrelmin(estimates)[0].tolist()] + [smax], Slices, estimates
 
 
 def defineBorders(df):
     borders = {}
     for i in ['XM', 'YM']:
         outL, Slices, estimates = defineKDE(df, i)
-        borders[i] = [0] + outL + [df[i].max()]
-        plt.scatter(Slices, estimates, s=0.1, c="gray")
+        borders[i] = outL
+        plt.scatter(x=Slices, y=estimates, s=0.1, c="gray")
         ymin, ymax = plt.ylim()
         plt.vlines(borders[i], ymin=ymin, ymax=ymax, color='lightgray', zorder=1)
         plt.xticks(borders[i],borders[i])
@@ -123,16 +143,22 @@ def adjustBorders(df, xborder, yborder):
     newYborder = []
     for i in range(len(xborder)-1):
         temp = df[(df['XM'] > xborder[i]) & (df['XM'] < xborder[i+1])]
+        if len(temp) == 0:
+            newYborder.append(yborder)
+            continue
         outL, _, _ = defineKDE(temp, 'YM')
         if len(outL) == len(yborder):
-            newYborder.append([0] + outL + [temp['YM'].max()])
+            newYborder.append(outL)
         else:
             newYborder.append(yborder)
     for i in range(len(yborder)-1):
         temp = df[(df['YM'] > yborder[i]) & (df['YM'] < yborder[i+1])]
+        if len(temp) == 0:
+            newXborder.append(xborder)
+            continue
         outL, _, _ = defineKDE(temp, 'XM')
         if len(outL) == len(xborder):
-            newXborder.append([0] + outL + [temp['XM'].max()])
+            newXborder.append(outL)
         else:
             newXborder.append(xborder)
     return newXborder, newYborder
@@ -313,11 +339,11 @@ if __name__ == '__main__':
     parser.add_argument('--onlyTracking', action='store_true', help='Only tracking stage will be done, default=False')
     parser.add_argument('--skipTracking', action='store_true', help='Skip tracking stage, default=False \
                                                                     --trackingResult should be specified.')
-    parser.add_argument('--easyBorder', action='store_true', help='If True, border determination was simplified, default=False')
+    parser.add_argument('--complexBorder', action='store_true', help='If True, complex border determination was turned on, default=False')
     parser.add_argument('--trackingResult', type=str, metavar='file', help='Path to output files of Tracking. If not specified, {prefix}.txt', default=None)
     parser.add_argument('--fps', metavar='FPS', type=int, help='output FPS', default=-1)
-    parser.add_argument('--analysis_range', metavar='range', nargs=2, type=int, help='a range of frames to be analyzed', default=(0, -1))
-    parser.add_argument('--autoCrop', type=int, metavar='columns, rows', nargs=2, help='set coloumns and rows for cropping, set -1 for non-specified', default=(-1, -1))
+    parser.add_argument('--analysis_range', metavar=('start', 'end'), nargs=2, type=int, help='a range of frames to be analyzed', default=(0, -1))
+    parser.add_argument('--autoCrop', type=int, metavar=('columns', 'rows'), nargs=2, help='set coloumns and rows for cropping, set -1 for non-specified', default=(-1, -1))
     parser.add_argument('--autoCropPreAnalysis', metavar='Preanalyezed_frames', type=int, help='the number of preanalyzed frames', default=1000)
     parser.add_argument('--top', metavar='px', type=int, help='top position of frame', default=-1)
     parser.add_argument('--bottom', metavar='px', type=int, help='bottom position of frame', default=0)
@@ -345,6 +371,7 @@ if __name__ == '__main__':
             totalSlice = 0
             capture, fcount = startCapture(args.input[0])
             xlims, ylims = autoCrop(capture)
+            print('Cropped into {} {} {} {}'.format(str(xlims[0]), str(xlims[1]), str(ylims[0]), str(ylims[1])))
         
         print('Start Tracking')
 
@@ -435,11 +462,17 @@ if __name__ == '__main__':
     dfAnalysis = df[(df.Slice > initialAnalysis) & (df.Slice < endAnalysis)]
     analysisRange = range(initialAnalysis+1, endAnalysis+1)
     # border determination
-    xborder, yborder = defineBorders(df)
-    if not args.easyBorder:
-        newXborder, newYborder = adjustBorders(df, xborder, yborder)
+    if not args.complexBorder:
+        xborder, yborder = defineBorders(dfAnalysis)
+    else:
+        xlims = (dfAnalysis['XM'].min(), dfAnalysis['XM'].max())
+        ylims = (dfAnalysis['YM'].min(), dfAnalysis['YM'].max())
+        xlims, ylims = borderSelection(dfAnalysis, xlims, ylims, args.autoCrop[0], args.autoCrop[1])
+        dfAnalysis = dfAnalysis[(dfAnalysis['XM'] > xlims[0]) & (dfAnalysis['XM'] < xlims[1]) & (dfAnalysis['YM'] > ylims[0]) & (dfAnalysis['YM'] < ylims[1])]
+        xborder, yborder = defineBorders(dfAnalysis)
+        newXborder, newYborder = adjustBorders(dfAnalysis, xborder, yborder)
     for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
-        if args.easyBorder:
+        if not args.complexBorder:
             cBottom = yborder[j]
             cTop = yborder[j+1]
             cLeft = xborder[i]
@@ -477,7 +510,7 @@ if __name__ == '__main__':
     durMerged.to_csv('{}_durations.txt'.format(args.prefix), sep='\t', index=False)
     _, ax = plt.subplots()
     ax.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
-    if args.easyBorder:
+    if not args.complexBorder:
         plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
         plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
     else:
@@ -505,12 +538,12 @@ if __name__ == '__main__':
             if args.fps < 0:
                 fps = capture.get(cv.CAP_PROP_FPS)
             else:
-                fps = args.fps 
-            
+                fps = args.fps
+            top, right = setCropArea(capture)
             fourcc = cv.VideoWriter_fourcc('m','p','4', 'v')
             oWidth = int((right-args.left) * 0.5)
             oHeight = int((top-args.bottom) * 0.5)
-            outVideo = cv.VideoWriter("{}_pointed_{}".format(args.prefix, inCap.replace("avi", "mp4")), fourcc, fps, (oWidth, oHeight), isColor=False)
+            outVideo = cv.VideoWriter("{}_pointed_{}".format(args.prefix, re.sub(r'avi', r'mp4', inCap, re.IGNORECASE)), fourcc, fps, (oWidth, oHeight), isColor=False)
             c, progress = 0, 10
             while True:
                 ret, frame = capture.read()
