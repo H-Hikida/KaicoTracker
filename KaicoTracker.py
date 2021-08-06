@@ -1,8 +1,8 @@
 from __future__ import print_function
 import sys
-import re
 import warnings
 import argparse
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
@@ -94,19 +94,21 @@ def autoCrop(capture):
 
 
 def setCropArea(capture):
+    bottom = args.cropArea[0]
+    left = args.cropArea[2]
     if args.autoCrop != (-1, -1):
         top = ylims[1]
-    elif args.top < 0:
+    elif args.cropArea[1] < 0:
         top = int(capture.get(cv.CAP_PROP_FRAME_HEIGHT))
     else:
-        top = args.top
+        top = args.cropArea[1]
     if args.autoCrop != (-1, -1):
         right = xlims[1]
-    elif args.right < 0:
+    elif args.cropArea[3] < 0:
         right = int(capture.get(cv.CAP_PROP_FRAME_WIDTH))
     else:
-        right = args.right
-    return top, right
+        right = args.cropArea[3]
+    return bottom, top, left, right
 
 
 def subBack(frame):
@@ -255,14 +257,10 @@ def CalcDuration(inf, window, thresholdDist=1, thresholdActive=0.95):
     dfs = []
     aid = inf['id'].iloc[0]
     dfPosition = inf.set_index('Slice', drop=True)
-    #print(dfPosition.index.min(), dfPosition.index.max(), '\n', dfPosition.head())
     ind = dfPosition.index.min()
     ext = 0
-    #print(dfPosition[28790:28810])
     while ind + window + ext < dfPosition.index.max():
         temp = dfPosition.loc[ind:ind + window + ext]
-        #if len(temp) == 0:
-        #    print(ind, window, ext)
         activeRatio = len([i for i in temp.index if temp.loc[i, 'distance'] > thresholdDist]) / len(temp)
         if (temp.distance.mean() > thresholdDist) & (activeRatio > thresholdActive):
             ext += 1
@@ -325,7 +323,7 @@ def AnalyzeData(df):
     else:
         medDur = 0
     if args.segment > 0:
-        CalcAreaChange(dfDist, args.segment_edge_length)
+        CalcAreaChange(dfDist, args.segmentEdgeLength)
     return '\t'.join([df['id'].iloc[0], str(totalDist), str(medSpeed), str(medDur), str(len(dfDur))])+'\n', dfDist, dfDur
 
 
@@ -348,238 +346,262 @@ if __name__ == '__main__':
     parser.add_argument('--live', action='store_true', help='Display processing movie, default=False')
     parser.add_argument('--noPoint', action='store_false', help='Pointing stage will be skipped, default=True')
     parser.add_argument('--onlyTracking', action='store_true', help='Only tracking stage will be done, default=False')
-    parser.add_argument('--skipTracking', action='store_true', help='Skip tracking stage, default=False \
-                                                                    --trackingResult should be specified.')
+    parser.add_argument('--skipTracking', action='store_true', help='Skip tracking stage, default=False, --trackingResult should be specified.')
     parser.add_argument('--complexBorder', action='store_true', help='If True, complex border determination was turned on, default=False')
     parser.add_argument('--trackingResult', type=str, metavar='file', help='Path to output files of Tracking. If not specified, {prefix}.txt', default=None)
     parser.add_argument('--fps', metavar='FPS', type=int, help='output FPS', default=-1)
-    parser.add_argument('--analysis_range', metavar=('start', 'end'), nargs=2, type=int, help='a range of frames to be analyzed', default=(1, -1))
+    parser.add_argument('--analysisRange', metavar=('start', 'end'), nargs=2, type=int, help='a range of frames to be analyzed', default=(1, -1))
     parser.add_argument('--autoCrop', type=int, metavar=('columns', 'rows'), nargs=2, help='set coloumns and rows for cropping, set -1 for non-specified', default=(-1, -1))
     parser.add_argument('--autoCropPreAnalysis', metavar='Preanalyezed_frames', type=int, help='the number of preanalyzed frames', default=1000)
-    parser.add_argument('--top', metavar='px', type=int, help='top position of frame', default=-1)
-    parser.add_argument('--bottom', metavar='px', type=int, help='bottom position of frame', default=0)
-    parser.add_argument('--left', metavar='px', type=int, help='left position of frame', default=0)
-    parser.add_argument('--right', metavar='px', type=int, help='right position of frame', default=-1)
+    parser.add_argument('--cropArea', metavar=('bottom', 'top', 'left', 'right'), type=int, nargs=4, help='Cropping position of frame in px', default=(0, -1, 0, -1))
     parser.add_argument('--segment', metavar='int', type=int, help='the length of segment used for area segmentation', default=-1)
-    parser.add_argument('--segment_edge_length', metavar='px', type=int, help='length of segment square', default=-1)
+    parser.add_argument('--segmentEdgeLength', metavar='px', type=int, help='length of segment square', default=-1)
     parser.add_argument('--window', metavar='frames', type=int, help='seed window for duration analysis', default=10)
     parser.add_argument('--cropThreshold', metavar='ratio', type=float, help='Threshold to cut inappropreate borders', default=0.01)
     parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
     args = parser.parse_args()
 
 
-    #----------------------# Tracking #----------------------#
-    if args.skipTracking:
-        print('Tracking stage was skipped')
-    else:
-        if args.algo == 'KNN':
-            backSub = cv.createBackgroundSubtractorKNN()
+    with open("{}_analysis_summary.txt".format(args.prefix), "w") as analysis_out:
+        dt = datetime.now()
+        analysis_out.write(dt.strftime("%A, %d. %B %Y %I:%M%p") + '\n')
+        analysis_out.write("# argumnet values \n")
+        for i in vars(args):
+            analysis_out.write('\t'.join([i, str(vars(args)[i])])+'\n')
+        analysis_out.write('\n')
+
+        #----------------------# Tracking #----------------------#
+        if args.skipTracking:
+            print('Tracking stage was skipped')
+            analysis_out.write('Tracking stage was skipped')
         else:
-            backSub = cv.createBackgroundSubtractorMOG2()
-        backSub.setDetectShadows(False)
-        # Pre-analysis for autocrop
-        if args.autoCrop != (-1, -1):
-            print('Pre-analysis for autocrop')
-            totalSlice = 0
-            capture, fcount = startCapture(args.input[0])
-            xlims, ylims = autoCrop(capture)
-            print('Cropped into l{}, r{}, b{}, t{}'.format(str(xlims[0]), str(xlims[1]), str(ylims[0]), str(ylims[1])))
-        
-        print('Start Tracking')
+            if args.algo == 'KNN':
+                backSub = cv.createBackgroundSubtractorKNN()
+            else:
+                backSub = cv.createBackgroundSubtractorMOG2()
+            backSub.setDetectShadows(False)
+            # Pre-analysis for autocrop
+            if args.autoCrop != (-1, -1):
+                print('Pre-analysis for autocrop')
+                totalSlice = 0
+                capture, fcount = startCapture(args.input[0])
+                xlims, ylims = autoCrop(capture)
+                print('Cropped into l{}, r{}, b{}, t{}'.format(str(xlims[0]), str(xlims[1]), str(ylims[0]), str(ylims[1])))
+                analysis_out.write('# Cropping Area:\nLeft: {}\nRight: {}\nBottom: {}\nTop: {}\n'.format(str(xlims[0]), str(xlims[1]), str(ylims[0]), str(ylims[1])))
+            
+            print('Start Tracking')
 
-        df_captures = []
-        startSlice = 0
-        for inCap in args.input:
-            print("Video {}".format(str(args.input.index(inCap)+1))) 
-            capture, fcount = startCapture(inCap)
-            top, right = setCropArea(capture)
-            dfs =[]
-            c, progress = 0, 10
-            while True:
-                ret, frame = capture.read()
-                if frame is None:
-                    break
-                frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES)) + startSlice
-                c, progress = printCounter(c, fcount, progress)
+            df_captures = []
+            startSlice = 0
+            for inCap in args.input:
+                print("Video {}".format(str(args.input.index(inCap)+1))) 
+                capture, fcount = startCapture(inCap)
+                bottom, top, left, right= setCropArea(capture)
+                dfs =[]
+                c, progress = 0, 10
+                while True:
+                    ret, frame = capture.read()
+                    if frame is None:
+                        break
+                    frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES)) + startSlice
+                    c, progress = printCounter(c, fcount, progress)
 
-                # cropping & background subtraction & blurring foreground & contour detection
-                if args.autoCrop == (-1, -1):
-                    frameCropped = frame[args.bottom: top, args.left: right]
-                else:
-                    frameCropped = frame[ylims[0]:ylims[1], xlims[0]:xlims[1]]
-                fgMaskBlur, contours, hierarchy = subBack(frameCropped)
+                    # cropping & background subtraction & blurring foreground & contour detection
+                    if args.autoCrop == (-1, -1):
+                        vBottom, vTop, vLeft, vRight = bottom, top, args.left, right
+                    else:
+                        vBottom, vTop, vLeft, vRight = ylims[0], ylims[1], xlims[0], xlims[1]
+                    frameCropped = frame[vBottom:vTop, vLeft:vRight]
+                    fgMaskBlur, contours, hierarchy = subBack(frameCropped)
 
-                # display current frame #
-                cv.rectangle(frameCropped, (10, 2), (100,20), (255,255,255), -1)
-                cv.putText(frameCropped, str(frame_num), (15, 15), cv.FONT_HERSHEY_SIMPLEX, 0.5 , (0,0,0))
-                
-                # Draw contours
-                drawing = np.zeros((frameCropped.shape[0], frameCropped.shape[1], 3), dtype=np.uint8)
-                approxContours = []
-                hullContours = []
-                for i in contours:
-                    # Contour Approximation
-                    epsilon = 0.01*cv.arcLength(i, True)
-                    approx = cv.approxPolyDP(i, epsilon, True)
-                    approxContours.append(approx)
-                    # Minimum Enclosing Circle
-                    (x,y),radius = cv.minEnclosingCircle(i)
-                    center = (int(x),int(y))
-                    radius = int(radius)
-                    cv.circle(drawing,center,radius,(0,0,255),2)
-                    # make DataFrame row
-                    d = {'Slice': [int(frame_num)], 'XM': [int(x)], "YM": [int(y)], 'radius': [int(radius)]}
-                    dfs.append(pd.DataFrame(data=d, index=[0]))
-                for i in range(len(approxContours)):
-                    cv.drawContours(drawing, approxContours, i, (255, 0, 0), 2, cv.LINE_8, hierarchy, 0)
+                    # display current frame #
+                    cv.rectangle(frameCropped, (10, 2), (100,20), (255,255,255), -1)
+                    cv.putText(frameCropped, str(frame_num), (15, 15), cv.FONT_HERSHEY_SIMPLEX, 0.5 , (0,0,0))
                     
-                # diplay movie if --live flag is true
-                if args.live:
-                    cv.imshow('Frame', frameCropped)
-                    cv.imshow('FG Mask blur', fgMaskBlur)
-                    cv.imshow('Contours', drawing)
-                
-                keyboard = cv.waitKey(30)
-                if keyboard == 'q' or keyboard == 27:
-                    break
+                    # Draw contours
+                    drawing = np.zeros((frameCropped.shape[0], frameCropped.shape[1], 3), dtype=np.uint8)
+                    approxContours = []
+                    hullContours = []
+                    for i in contours:
+                        # Contour Approximation
+                        epsilon = 0.01*cv.arcLength(i, True)
+                        approx = cv.approxPolyDP(i, epsilon, True)
+                        approxContours.append(approx)
+                        # Minimum Enclosing Circle
+                        (x,y),radius = cv.minEnclosingCircle(i)
+                        center = (int(x),int(y))
+                        radius = int(radius)
+                        cv.circle(drawing,center,radius,(0,0,255),2)
+                        # make DataFrame row
+                        d = {'Slice': [int(frame_num)], 'XM': [int(x)], "YM": [int(y)], 'radius': [int(radius)]}
+                        dfs.append(pd.DataFrame(data=d, index=[0]))
+                    for i in range(len(approxContours)):
+                        cv.drawContours(drawing, approxContours, i, (255, 0, 0), 2, cv.LINE_8, hierarchy, 0)
+                        
+                    # diplay movie if --live flag is true
+                    if args.live:
+                        cv.imshow('Frame', frameCropped)
+                        cv.imshow('FG Mask blur', fgMaskBlur)
+                        cv.imshow('Contours', drawing)
+                    
+                    keyboard = cv.waitKey(30)
+                    if keyboard == 'q' or keyboard == 27:
+                        break
 
-            print('100% Done, Completed!')
-            df_temp = pd.concat(dfs, sort=False)
-            df_temp["file"] = inCap
-            df_captures.append(df_temp)
-            startSlice += fcount
-        cv.destroyAllWindows()
-        df = pd.concat(df_captures, sort=False, ignore_index=True)
-        df.to_csv('{}.txt'.format(args.prefix), sep='\t', index=False)
-        totalSlice = startSlice
-        # if onlyTracking is specified, the program will be quit.
-        if args.onlyTracking:
-            sys.exit()
+                print('100% Done, Completed!')
+                df_temp = pd.concat(dfs, sort=False)
+                df_temp["file"] = inCap
+                df_captures.append(df_temp)
+                startSlice += fcount
+            cv.destroyAllWindows()
+            df = pd.concat(df_captures, sort=False, ignore_index=True)
+            df.to_csv('{}.txt'.format(args.prefix), sep='\t', index=False)
+            totalSlice = startSlice
+            # if onlyTracking is specified, the program will be quit.
+            if args.onlyTracking:
+                sys.exit()
 
-    #----------------------# Analyzing #----------------------#
-    if args.skipTracking:
-        if args.trackingResult == None:
-            df = pd.read_csv('{}.txt'.format(args.prefix), sep='\t')
+        #----------------------# Analyzing #----------------------#
+        if args.skipTracking:
+            if args.trackingResult == None:
+                df = pd.read_csv('{}.txt'.format(args.prefix), sep='\t')
+            else:
+                df = pd.read_csv(args.trackingResult, sep='\t')
+        warnings.simplefilter('ignore', category='FutureWarning')
+        dt = datetime.now()
+        analysis_out.write("# Analysis \n")
+        analysis_out.write(dt.strftime("%A, %d. %B %Y %I:%M%p") + '\n')
+        print("Start analyzing...")
+        # Distant calculation
+        sepList = []
+        initialAnalysis = args.analysisRange[0]
+        if args.analysisRange[1] > 0:
+            endAnalysis = args.analysisRange[1]
         else:
-            df = pd.read_csv(args.trackingResult, sep='\t')
-    warnings.simplefilter('ignore', category='FutureWarning')
-    print("Start analyzing...")
-    # Distant calculation
-    sepList = []
-    initialAnalysis = args.analysis_range[0]
-    if args.analysis_range[1] > 0:
-        endAnalysis = args.analysis_range[1]
-    else:
-        endAnalysis = df.Slice.max()
-    dfAnalysis = df[(df.Slice > initialAnalysis) & (df.Slice < endAnalysis)]
-    analysisRange = range(initialAnalysis, endAnalysis)
-    # border determination
-    xlims, ylims = borderSelection(dfAnalysis, args.autoCrop[0], args.autoCrop[1])
-    print("Analysis is confined to l{}, r{}, b{}, t{}".format(xlims[0], xlims[1], ylims[0], ylims[1]))
-    dfAnalysis = dfAnalysis[(dfAnalysis['XM'] > xlims[0]) & (dfAnalysis['XM'] < xlims[1]) & (dfAnalysis['YM'] > ylims[0]) & (dfAnalysis['YM'] < ylims[1])]
-    xborder, yborder = defineBorders(dfAnalysis)
-    if args.complexBorder:
-        newXborder, newYborder = adjustBorders(dfAnalysis, xborder, yborder)
-    for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
+            endAnalysis = df.Slice.max()
+        dfAnalysis = df[(df.Slice > initialAnalysis) & (df.Slice < endAnalysis)]
+        analysisRange = range(initialAnalysis, endAnalysis)
+        # border determination
+        xlims, ylims = borderSelection(dfAnalysis, args.autoCrop[0], args.autoCrop[1])
+        print("Analysis is confined to l{}, r{}, b{}, t{}".format(xlims[0], xlims[1], ylims[0], ylims[1]))
+        analysis_out.write("# Analysis is confined to\nLeft: {}\nRight: {}\n:Bottom: {}\nTop: {}\n".format(xlims[0], xlims[1], ylims[0], ylims[1]))
+        dfAnalysis = dfAnalysis[(dfAnalysis['XM'] > xlims[0]) & (dfAnalysis['XM'] < xlims[1]) & (dfAnalysis['YM'] > ylims[0]) & (dfAnalysis['YM'] < ylims[1])]
+        xborder, yborder = defineBorders(dfAnalysis)
+        if args.complexBorder:
+            newXborder, newYborder = adjustBorders(dfAnalysis, xborder, yborder)
+        for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
+            if not args.complexBorder:
+                cBottom = yborder[j]
+                cTop = yborder[j+1]
+                cLeft = xborder[i]
+                cRight = xborder[i+1]
+            else:
+                cBottom = newYborder[i][j]
+                cTop = newYborder[i][j+1]
+                cLeft = newXborder[j][i]
+                cRight = newXborder[j][i+1]
+            area_id = '{}_{}_{}_{}'.format(cLeft, cRight, cBottom, cTop)
+            temp = dfAnalysis[(dfAnalysis.XM > cLeft) & (dfAnalysis.XM < cRight) & (dfAnalysis.YM > cBottom) & (dfAnalysis.YM < cTop)].copy()
+            temp['id'] = area_id
+            sepList.append(temp)
+        print("Start Calculating...")
+        oLines = []
+        merged_list = []
+        Durations = []
+        c, progress = 0, 10
+        for i in sepList:
+            c, progress = printCounter(c, (len(xborder)-1)*(len(yborder)-1), progress)
+            if len(i) == 0:
+                continue
+            oLine, oDfDist, dfDur = AnalyzeData(i)
+            oLines.append(oLine)
+            merged_list.append(oDfDist)
+            Durations.append(dfDur)
+        print('100% Done, Completed!')
+        with open('{}_dist_data.txt'.format(args.prefix), "w") as outDist:
+            outDist.write('\t'.join(["id", "total_distance", "median_speed", "median_duration", "frequency"])+'\n')
+            for i in oLines:
+                outDist.write(i)
+        dfMerged = pd.concat(merged_list, axis=0, sort=False, ignore_index=True)
+        dfMerged.to_csv('{}_positions.txt'.format(args.prefix), sep='\t', index=False)
+        durMerged = pd.concat(Durations, axis=0, sort=False, ignore_index=True)
+        durMerged.to_csv('{}_durations.txt'.format(args.prefix), sep='\t', index=False)
+        _, ax = plt.subplots()
+        ax.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
         if not args.complexBorder:
-            cBottom = yborder[j]
-            cTop = yborder[j+1]
-            cLeft = xborder[i]
-            cRight = xborder[i+1]
+            plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
+            plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
         else:
-            cBottom = newYborder[i][j]
-            cTop = newYborder[i][j+1]
-            cLeft = newXborder[j][i]
-            cRight = newXborder[j][i+1]
-        area_id = '{}_{}_{}_{}'.format(cLeft, cRight, cBottom, cTop)
-        temp = dfAnalysis[(dfAnalysis.XM > cLeft) & (dfAnalysis.XM < cRight) & (dfAnalysis.YM > cBottom) & (dfAnalysis.YM < cTop)].copy()
-        temp['id'] = area_id
-        sepList.append(temp)
-    print("Start Calculating...")
-    oLines = []
-    merged_list = []
-    Durations = []
-    c, progress = 0, 10
-    for i in sepList:
-        c, progress = printCounter(c, (len(xborder)-1)*(len(yborder)-1), progress)
-        if len(i) == 0:
-            continue
-        oLine, oDfDist, dfDur = AnalyzeData(i)
-        oLines.append(oLine)
-        merged_list.append(oDfDist)
-        Durations.append(dfDur)
-    print('100% Done, Completed!')
-    with open('{}_dist_data.txt'.format(args.prefix), "w") as outDist:
-        outDist.write('\t'.join(["id", "total_distance", "median_speed", "median_duration", "frequency"])+'\n')
-        for i in oLines:
-            outDist.write(i)
-    dfMerged = pd.concat(merged_list, axis=0, sort=False, ignore_index=True)
-    dfMerged.to_csv('{}_positions.txt'.format(args.prefix), sep='\t', index=False)
-    durMerged = pd.concat(Durations, axis=0, sort=False, ignore_index=True)
-    durMerged.to_csv('{}_durations.txt'.format(args.prefix), sep='\t', index=False)
-    _, ax = plt.subplots()
-    ax.scatter(dfMerged.XM, dfMerged.YM, c="gray", s=0.1)
-    if not args.complexBorder:
-        plt.hlines(yborder, colors="lightgray", linewidth=1, xmin=min(xborder), xmax=max(xborder))
+            rects = []
+            for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
+                cBottom = newYborder[i][j]
+                cHeight = newYborder[i][j+1] - newYborder[i][j]
+                cLeft = newXborder[j][i]
+                cWidth = newXborder[j][i+1] - newXborder[j][i]
+                rect = mpatches.Rectangle((cLeft, cBottom), width=cWidth, height=cHeight, fill=True)
+                rects.append(rect)
+            collection = PatchCollection(rects, alpha=0.2, color='lightgray')
+            ax.add_collection(collection)
         ax.set_xticks(xborder)
         ax.set_xticklabels(xborder)
-        plt.vlines(xborder, colors="lightgray", linewidth=1, ymin=min(yborder), ymax=max(yborder))
         ax.set_yticks(yborder)
         ax.set_yticklabels(yborder)
-    else:
-        rects = []
-        for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
-            cBottom = newYborder[i][j]
-            cHeight = newYborder[i][j+1] - newYborder[i][j]
-            cLeft = newXborder[j][i]
-            cWidth = newXborder[j][i+1] - newXborder[j][i]
-            rect = mpatches.Rectangle((cLeft, cBottom), width=cWidth, height=cHeight, fill=True)
-            rects.append(rect)
-        collection = PatchCollection(rects, alpha=0.2, color='lightgray')
-        ax.add_collection(collection)
-    plt.savefig('{}_positions.{}'.format(args.prefix, args.format), format=args.format, dpi=200)
-    plt.close('all')
+        ax.set_xlim(min(xborder), max(xborder))
+        ax.set_ylim(min(yborder), max(yborder))
+        plt.savefig('{}_positions.{}'.format(args.prefix, args.format), format=args.format, dpi=200)
+        plt.close('all')
 
-    #----------------------# Pointing #----------------------#
-    # Video setting
-    if args.noPoint:
-        print("Start pointing...")
-        startSlice = 0
-        for inCap in args.input:
-            capture, fcount = startCapture(inCap)
-            print("Video {}".format(str(args.input.index(inCap)+1))) 
-            if args.fps < 0:
-                fps = capture.get(cv.CAP_PROP_FPS)
-            else:
-                fps = args.fps
-            top, right = setCropArea(capture)
-            fourcc = cv.VideoWriter_fourcc('m','p','4', 'v')
-            oWidth = int((right-args.left) * 0.5)
-            oHeight = int((top-args.bottom) * 0.5)
-            outVideo = cv.VideoWriter("{}_pointed_{}.mp4".format(args.prefix, str(args.input.index(inCap)+1)), fourcc, fps, (oWidth, oHeight), isColor=False)
-            c, progress = 0, 10
-            while True:
-                ret, frame = capture.read()
-                if frame is None:
-                    break
-                c, progress = printCounter(c, fcount, progress)
-                frame_num = startSlice + int(capture.get(cv.CAP_PROP_POS_FRAMES))
-                frameCropped = frame[args.bottom: top, args.left: right]
-                temp = dfMerged[(dfMerged['Slice'] == frame_num) & (dfMerged['file'] == inCap)]
-                if len(temp) > 0:
-                    for i in temp.index:
-                        x = int(temp.loc[i, 'XM'])
-                        y = int(temp.loc[i, 'YM'])
-                        frameCropped = cv.circle(frameCropped, (x, y), 5, color=(0, 0, 255), thickness=-1)
-                im_gray = cv.cvtColor(frameCropped, cv.COLOR_BGR2GRAY)
-                if args.live:
-                    cv.imshow('outVideo', im_gray)
-                outVideo.write(cv.resize(im_gray, dsize=(oWidth, oHeight)))
+        #----------------------# Pointing #----------------------#
+        # Video setting
+        if args.noPoint:
+            dt = datetime.now()
+            analysis_out.write("# Pointing \n")
+            analysis_out.write(dt.strftime("%A, %d. %B %Y %I:%M%p") + '\n')
+            print("Start pointing...")
+            startSlice = 0
+            for inCap in args.input:
+                capture, fcount = startCapture(inCap)
+                # cropping & background subtraction & blurring foreground & contour detection
+                bottom, top, left, right = setCropArea(capture)
+                print("Video {}".format(str(args.input.index(inCap)+1))) 
+                if args.fps < 0:
+                    fps = capture.get(cv.CAP_PROP_FPS)
+                else:
+                    fps = args.fps
+                fourcc = cv.VideoWriter_fourcc('m','p','4', 'v')
+                oWidth = int((right-left) * 0.5)
+                oHeight = int((top-bottom) * 0.5)
+                outVideo = cv.VideoWriter("{}_pointed_{}.mp4".format(args.prefix, str(args.input.index(inCap)+1)), fourcc, fps, (oWidth, oHeight), isColor=False)
+                c, progress = 0, 10
+                while True:
+                    ret, frame = capture.read()
+                    if frame is None:
+                        break
+                    c, progress = printCounter(c, fcount, progress)
+                    frame_num = startSlice + int(capture.get(cv.CAP_PROP_POS_FRAMES))
+                    frameCropped = frame[vBottom:vTop, vLeft:vRight]
+                    #if args.autoCrop == (-1, -1):
+                    #    frameCropped = frame[args.bottom: top, args.left: right]
+                    #else:
+                    #    frameCropped = frame[ylims[0]:ylims[1], xlims[0]:xlims[1]]
+                    temp = dfMerged[(dfMerged['Slice'] == frame_num) & (dfMerged['file'] == inCap)]
+                    if len(temp) > 0:
+                        for i in temp.index:
+                            x = int(temp.loc[i, 'XM'])
+                            y = int(temp.loc[i, 'YM'])
+                            frameCropped = cv.circle(frameCropped, (x, y), 5, color=(0, 0, 255), thickness=-1)
+                    im_gray = cv.cvtColor(frameCropped, cv.COLOR_BGR2GRAY)
+                    if args.live:
+                        cv.imshow('outVideo', im_gray)
+                    outVideo.write(cv.resize(im_gray, dsize=(oWidth, oHeight)))
 
-                keyboard = cv.waitKey(30)
-                if keyboard == 'q' or keyboard == 27:
-                    break
-            outVideo.release()
-            startSlice += fcount
-            print('100% Done, Completed!')
-        cv.destroyAllWindows()
+                    keyboard = cv.waitKey(30)
+                    if keyboard == 'q' or keyboard == 27:
+                        break
+                outVideo.release()
+                startSlice += fcount
+                print('100% Done, Completed!')
+            cv.destroyAllWindows()
+        dt = datetime.now()
+        analysis_out.write("# All procedures end\n")
+        analysis_out.write(dt.strftime("%A, %d. %B %Y %I:%M%p") + '\n')
