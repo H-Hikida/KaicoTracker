@@ -2,7 +2,8 @@
 /test/
 /test2/
 memo.sh
-./.DS_Store
+.DS_Store
 
 # VS code settings
 .vscode/
+.DS_Store
