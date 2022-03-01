@@ -60,7 +60,7 @@ The regular output will be:
 
 ---
 ### Options
-#### I/O parameter
+###### I/O parameter
 **--input file [file ...]**
 Path to a video or a sequence of image. Multiple videos can be analyzed at the same time. Please provide them in order.
 
@@ -73,7 +73,7 @@ Output FPS, default is -1, which uses the same FPS with the input.
 **--format {png,pdf}**
 Output format for figures, default is 'png'.
 
-#### Tracking parameter
+###### Tracking parameter
 **--algo {MOG2,KNN}**
 Background subtraction method, default is KNN.
 
@@ -83,7 +83,7 @@ Learning Rate for applied method, default is 0.8.
 **--blurringSquare int px**
 Edge length of blurring square in px.
 
-#### Aanalyzing parameter
+###### Aanalyzing parameter
 **--lapse seconds**
 Time-lapse interval, default is 3 s.
 
@@ -96,7 +96,7 @@ Length of segment square in px.
 **--window frames**
 Seed window for duration analysis, default is 30 s.
 
-#### Parameter specifies what to be analyzed
+###### Parameter specifies what to be analyzed
 **--analysisRange start end**
 A range of frames to be analyzed in the input video.
 
@@ -115,7 +115,7 @@ Cropping area of video in px.
 **--cropThreshold ratio**
 Threshold to cut inappropreate borders, default=0.01. If the border separate the points whose ratio is below the designated value, the border is discarded.
 
-#### Selection of stages
+###### Selection of stages
 **--noPoint**
 If specified, validation stage is skipped.
 
@@ -131,7 +131,7 @@ If specified, only Analysis stage is run.
 **--onlyPoint** 
 If specified, only validation stage is run.
 
-#### Parameter required for specific stages
+###### Parameter required for specific stages
 **--cropAreaForPoint bottom top left right**
 Cropping position of frame in px, required when `--skipTracking` is specified and `--noPoint` is not specified, or `--onlyPoint` is specified
 
@@ -141,14 +141,14 @@ Path to output files of Tracking. If not specified, {prefix}.txt is read.
 **--analysisResult file**
 Path to output files of Analysis. If not specified, {prefix}_positions.txt is read.
 
-#### Display parameter
+###### Display parameter
 **--live**
 If specified, the videos under proccessing are displayed.
 
 **--liveSave**
 If specified, the videos under proccessing are saved. Mainly used for developmental purpose.
 
-#### Miscellaneous
+###### Miscellaneous
 **-h, --help**
 show the help message and exit
 
