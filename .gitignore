@@ -4,6 +4,7 @@
 /test3/
 memo.sh
 .DS_Store
+.gitignore
 
 # VS code settings
 .vscode/
