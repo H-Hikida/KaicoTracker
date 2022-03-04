@@ -15,17 +15,17 @@ KaicoTracker is written in Python 3.6.3 with pandas (1.1.5), scipy (1.5.4), matp
 ### Installation
 To start
 
-> git clone https://github.com/H-Hikida/KaicoTracker
-
-> cd KaicoTracker
-
-> python KaicoTracker.py -h
+> git clone https://github.com/H-Hikida/KaicoTracker  
+>  
+> cd KaicoTracker  
+>  
+> python KaicoTracker.py -h  
 
 ---
 ### Basic usage
 Test data is provided in the repository, so that users can test if the program woks or not. It is recommended to use `--auroCrop` option with the information of how larvae were separated by Columns/Rows. It prevent to create some useless data and noises.
 
-> KaicoTracker.py --input vtest_color_200.avi --autoCrop 4 5
+> KaicoTracker.py --input test.avi --autoCrop 4 5
 
 The regular output will be:
 
@@ -56,7 +56,7 @@ The regular output will be:
 ##### Validation part
 *_pointed_X.mp4
 
-\* can be specified with `--prefix` option, otherwise it is set as `stdout`. Four Xs included just before the extensions, inidicate attribute of the area analyzed. Additionaly, KaicoTracker can produce video files used for tracking, using `--liveSave` option.
+\* can be specified with `--prefix` option, otherwise it is set as `stdout`. Four Xs included just before the extensions, inidicate attribute of the area analyzed. Additionaly, KaicoTracker can produce video files used for tracking, using `--liveSave` option. Output format can be changed to PDF for images and AVI for videos.
 
 ---
 ### Options
