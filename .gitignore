@@ -1,9 +1,0 @@
-# self
-.gitignore
-
-# test files
-/test/
-
-# VS code settings
-.vscode/
-.DS_Store
