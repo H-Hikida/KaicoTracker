@@ -16,7 +16,9 @@ KaicoTracker is written in Python 3.6.3 with pandas (1.1.5), scipy (1.5.4), matp
 To start
 
 > git clone https://github.com/H-Hikida/KaicoTracker  
+>  
 > cd KaicoTracker  
+>  
 > python KaicoTracker.py -h  
 
 ---
