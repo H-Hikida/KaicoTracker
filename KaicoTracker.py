@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from __future__ import print_function
 import sys
 import warnings
@@ -48,6 +49,8 @@ def argSetting():
     parser.add_argument('--analysisResult', type=str, metavar='file', help='Path to output files of Analysis. If not specified, {prefix}_positions.txt', default=None)
     parser.add_argument('--fps', metavar='FPS', type=int, help='output FPS', default=-1)
     parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
+    parser.add_argument('--videoFormat', type=str, help='output format for videos', default='mp4', choices=['mp4', 'AVI'])
+    parser.add_argument('--NoShrink', action='store_false', help='If specified, video is not shrinked')
     args = parser.parse_args()
     return args
 
@@ -213,6 +216,20 @@ def adjustBorders(df, xborder, yborder):
     return newXborder, newYborder
 
 
+def videoSetting(args, capture):
+    if args.fps < 0:
+        fps = capture.get(cv.CAP_PROP_FPS)
+    else:
+        fps = args.fps
+    if args.videoFormat == 'mp4':
+        ext = 'mp4'
+        fourcc = cv.VideoWriter_fourcc('m','p','4','v')
+    else:
+        ext = 'AVI'
+        fourcc = cv.VideoWriter_fourcc('M','J','P','G')
+    return fourcc, fps, ext
+
+
 def mainTracking(args, analysis_out):
     if args.algo == 'KNN':
         backSub = cv.createBackgroundSubtractorKNN()
@@ -241,16 +258,15 @@ def mainTracking(args, analysis_out):
     print('Start Tracking')
     df_captures = []
     startSlice = 0
-    if args.fps < 0:
-        fps = capture.get(cv.CAP_PROP_FPS)
-    else:
-        fps = args.fps
-    fourcc = cv.VideoWriter_fourcc('m','p','4', 'v')
-    outVideo_original = cv.VideoWriter("{}_pointed_original.mp4".format(args.prefix), fourcc, fps, (oWidth, oHeight), isColor=False)
-    outVideo_gray = cv.VideoWriter("{}_pointed_gray.mp4".format(args.prefix), fourcc, fps, (oWidth, oHeight), isColor=False)
-    outVideo_contours = cv.VideoWriter("{}_pointed_contours.mp4".format(args.prefix), fourcc, fps, (oWidth, oHeight), isColor=True)
+    fourcc, fps, ext = videoSetting(args, capture)
+    if args.NoShrink:
+        oWidth, oHeight = int(oWidth*0.5), int(oHeight*0.5)
     for inCap in args.input:
-        print("Video {}".format(str(args.input.index(inCap)+1))) 
+        videoIndex = str(args.input.index(inCap)+1)
+        outVideo_original = cv.VideoWriter("{}_original{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
+        outVideo_gray = cv.VideoWriter("{}_gray{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
+        outVideo_contours = cv.VideoWriter("{}_contours{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=True)
+        print("Video {}".format(videoIndex)) 
         capture, fcount = startCapture(inCap)
         bottom, top, left, right= setCropArea(capture, ylims, xlims, args)
         dfs =[]
@@ -260,6 +276,10 @@ def mainTracking(args, analysis_out):
             if frame is None:
                 break
             frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES)) + startSlice
+            if args.analysisRange[1] > 0:
+                if frame_num > args.analysisRange[1]:
+                    isBreak = True
+                    break
             c, progress = printCounter(c, fcount, progress)
 
             # cropping & background subtraction & blurring foreground & contour detection
@@ -305,12 +325,18 @@ def mainTracking(args, analysis_out):
             keyboard = cv.waitKey(30)
             if keyboard == 'q' or keyboard == 27:
                 break
-
-        print('100% Done, Completed!')
+        
+        if isBreak:
+            print('Frame over the analysis range, quit')
+        else:
+            print('100% Done, Completed!')
         df_temp = pd.concat(dfs, sort=False)
         df_temp["file"] = inCap
         df_captures.append(df_temp)
         startSlice += fcount
+        outVideo_original.release()
+        outVideo_gray.release()
+        outVideo_contours.release()
     cv.destroyAllWindows()
     df = pd.concat(df_captures, sort=False, ignore_index=True)
     df.to_csv('{}.txt'.format(args.prefix), sep='\t', index=False)
@@ -382,7 +408,7 @@ def CalcAreaChange(df, analysisRange, args, length=-1):
     initialAnalysis = analysisRange[0]
     endAnalysis = analysisRange[1]
     numSegment = (endAnalysis - initialAnalysis) // args.segment + 1
-    _, axs = plt.subplots(nrows=1, ncols=numSegment, figsize=(numSegment, 1))
+    _, axs = plt.subplots(nrows=1, ncols=numSegment, figsize=(numSegment, 1), squeeze=False)
     plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0)
     Xcen = df.XM.mean()
     Ycen = df.YM.mean()
@@ -392,13 +418,13 @@ def CalcAreaChange(df, analysisRange, args, length=-1):
         length = max(Xstd, Ystd, 1) * 3
     for k in range(0, numSegment):
         part = df[(df.Slice > args.segment * k) & (df.Slice <= args.segment * (k+1))]
-        axs[k].set_xlim(Xcen-length, Xcen+length)
-        axs[k].set_ylim(Ycen-length, Ycen+length)
-        axs[k].scatter(part.XM, part.YM, s=0.1, alpha=0.5, c='gray')
-        axs[k].set_xticklabels([])
-        axs[k].set_yticklabels([])
-        axs[k].set_xticks([])
-        axs[k].set_yticks([])
+        axs[0][k].set_xlim(Xcen-length, Xcen+length)
+        axs[0][k].set_ylim(Ycen-length, Ycen+length)
+        axs[0][k].scatter(part.XM, part.YM, s=0.1, alpha=0.5, c='gray')
+        axs[0][k].set_xticklabels([])
+        axs[0][k].set_yticklabels([])
+        axs[0][k].set_xticks([])
+        axs[0][k].set_yticks([])
     plt.savefig('{}_segment_{}.{}'.format(args.prefix, df['id'].iloc[0], args.format), format=args.format, dpi=200)
     plt.close('all')
 
@@ -473,7 +499,7 @@ def AnalyzeData(df, analysisRange, args):
     else:
         medDur = 0
     if args.segment > 0:
-        CalcAreaChange(dfDist, analysisRange, args, args.segmentEdgeLength)
+        CalcAreaChange(dfDist, args.analysisRange, args, args.segmentEdgeLength)
     return '\t'.join([df['id'].iloc[0], str(totalDist), str(medSpeed), str(medDur), str(len(dfDur))])+'\n', dfDist, dfDur
 
 
@@ -556,27 +582,25 @@ def mainAnalyze(args, df, analysis_out):
     ax.set_ylim(min(yborder), max(yborder))
     plt.savefig('{}_positions.{}'.format(args.prefix, args.format), format=args.format, dpi=200)
     plt.close('all')
-    return dfMerged
+    return dfMerged, xlims, ylims 
 
 
-def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, noCrop):
+def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, cropInfo):
     startSlice = 0
     for inCap in args.input:
+        videoIndex = str(args.input.index(inCap)+1)
         capture, fcount = startCapture(inCap)
-        if noCrop:
-            vBottom, vTop, vLeft, vRight = args.cropAreaForPoint
+        if not cropInfo:
             vTop = int(capture.get(cv.CAP_PROP_FRAME_HEIGHT))
             vRight = int(capture.get(cv.CAP_PROP_FRAME_WIDTH))
         # cropping & background subtraction & blurring foreground & contour detection
-        print("Video {}".format(str(args.input.index(inCap)+1))) 
-        if args.fps < 0:
-            fps = capture.get(cv.CAP_PROP_FPS)
-        else:
-            fps = args.fps
-        fourcc = cv.VideoWriter_fourcc('m','p','4', 'v')
-        oWidth = int((vRight-vLeft) * 0.5)
-        oHeight = int((vTop-vBottom) * 0.5)
-        outVideo = cv.VideoWriter("{}_pointed_{}.mp4".format(args.prefix, str(args.input.index(inCap)+1)), fourcc, fps, (oWidth, oHeight), isColor=False)
+        print("Video {}".format(videoIndex)) 
+        oWidth = int((vRight-vLeft))
+        oHeight = int((vTop-vBottom))
+        if args.NoShrink:
+            oWidth, oHeight = int(oWidth*0.5), int(oHeight*0.5)
+        fourcc, fps, ext = videoSetting(args, capture)
+        outVideo = cv.VideoWriter("{}_pointed_{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
         c, progress = 0, 10
         while True:
             _, frame = capture.read()
@@ -584,6 +608,10 @@ def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, noCrop):
                 break
             c, progress = printCounter(c, fcount, progress)
             frame_num = startSlice + int(capture.get(cv.CAP_PROP_POS_FRAMES))
+            if args.analysisRange[1] > 0:
+                if frame_num > args.analysisRange[1]:
+                    isBreak = True
+                    break
             frameCropped = frame[vBottom:vTop, vLeft:vRight]
             temp = dfMerged[(dfMerged['Slice'] == frame_num) & (dfMerged['file'] == inCap)]
             if len(temp) > 0:
@@ -601,7 +629,10 @@ def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, noCrop):
                 break
         outVideo.release()
         startSlice += fcount
-        print('100% Done, Completed!')
+        if isBreak:
+            print('Frame over the analysis range, quit')
+        else:
+            print('100% Done, Completed!')
     cv.destroyAllWindows()
 
 
@@ -638,7 +669,7 @@ def main():
             analysis_out.write("# Analysis \n")
             analysis_out.write(dt.strftime("%A, %d. %B %Y %I:%M%p") + '\n')
             print("Start analyzing...")
-            dfMerged = mainAnalyze(args, df, analysis_out)
+            dfMerged, xlims, ylims = mainAnalyze(args, df, analysis_out)
         #----------------------# Pointing #----------------------#
         # Video setting
         if args.noPoint | args.onlyAnalyis:
@@ -649,24 +680,27 @@ def main():
             analysis_out.write("# Pointing \n")
             analysis_out.write(dt.strftime("%A, %d. %B %Y %I:%M%p") + '\n')
             print("Start pointing...")
-            if args.skipTracking | args.onlyPoint:
+            if args.skipTracking:
+                vBottom, vTop, vLeft, vRight = ylims[0], ylims[1], xlims[0], xlims[1]
+                cropInfo = True
+            elif args.onlyPoint:
+                vBottom, vTop, vLeft, vRight = args.cropAreaForPoint
                 if  args.cropAreaForPoint == (0, -1, 0, -1):
                     print('WARNING: Cropping area is not specified.')
-                    noCrop = True
+                    cropInfo = False
                 else:
-                    vBottom, vTop, vLeft, vRight = args.cropAreaForPoint
-                    noCrop = False
-            else:
-                noCrop = False
-            if args.onlyPoint:
+                    cropInfo = True
                 if args.analysisResult == None:
                     dfMerged = pd.read_csv('{}_positions.txt'.format(args.prefix), sep='\t')
                 else:
                     dfMerged = pd.read_csv(args.analysisResult, sep='\t')
-            mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, noCrop)
+            else:
+                cropInfo = True
+            mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, cropInfo)
             dt = datetime.now()
         analysis_out.write("# All procedures end\n")
         analysis_out.write(dt.strftime("%A, %d. %B %Y %I:%M%p") + '\n')
+
 
 if __name__ == '__main__':
     sys.exit(main())

@@ -1,10 +1,5 @@
 # test files
 /test/
-/test2/
-/test3/
-memo.sh
-.DS_Store
-.gitignore
 
 # VS code settings
 .vscode/

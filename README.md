@@ -73,6 +73,12 @@ Output FPS, default is -1, which uses the same FPS with the input.
 **--format {png,pdf}**
 Output format for figures, default is 'png'.
 
+**--videoFormat {'mp4', 'AVI'}**
+Output format for videos, default is 'mp4'.
+
+**--NoShrink**
+If specified, videos are generated with original size. Otherwise, they are resized into 1/4.
+
 ###### Tracking parameter
 **--algo {MOG2,KNN}**
 Background subtraction method, default is KNN.
@@ -150,7 +156,7 @@ If specified, the videos under proccessing are saved. Mainly used for developmen
 
 ###### Miscellaneous
 **-h, --help**
-show the help message and exit
+Show the help message and exit.
 
 ---
 ### References
