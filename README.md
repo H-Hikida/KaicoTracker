@@ -56,7 +56,7 @@ The regular output will be:
 ##### Validation part
 *_pointed_X.mp4
 
-\* can be specified with `--prefix` option, otherwise it is set as `stdout`. Four Xs included just before the extensions, inidicate attribute of the area analyzed. Additionaly, KaicoTracker can produce video files used for tracking, using `--liveSave` option.
+\* can be specified with `--prefix` option, otherwise it is set as `stdout`. Four Xs included just before the extensions, inidicate attribute of the area analyzed. Additionaly, KaicoTracker can produce video files used for tracking, using `--liveSave` option. Output format can be changed to PDF for images and AVI for videos.
 
 ---
 ### Options
