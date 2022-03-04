@@ -256,7 +256,7 @@ def mainTracking(args, analysis_out):
     else:
         oHeight = ylims[1] - ylims[0]
     print('Start Tracking')
-    df_captures = []
+    df_captures = []    
     startSlice = 0
     fourcc, fps, ext = videoSetting(args, capture)
     if args.NoShrink:
@@ -271,6 +271,7 @@ def mainTracking(args, analysis_out):
         bottom, top, left, right= setCropArea(capture, ylims, xlims, args)
         dfs =[]
         c, progress = 0, 10
+        isBreak = False
         while True:
             _, frame = capture.read()
             if frame is None:
@@ -330,9 +331,10 @@ def mainTracking(args, analysis_out):
             print('Frame over the analysis range, quit')
         else:
             print('100% Done, Completed!')
-        df_temp = pd.concat(dfs, sort=False)
-        df_temp["file"] = inCap
-        df_captures.append(df_temp)
+        if len(dfs) > 0:
+            df_temp = pd.concat(dfs, sort=False)
+            df_temp["file"] = inCap
+            df_captures.append(df_temp)
         startSlice += fcount
         outVideo_original.release()
         outVideo_gray.release()
@@ -602,6 +604,7 @@ def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, cropInfo):
         fourcc, fps, ext = videoSetting(args, capture)
         outVideo = cv.VideoWriter("{}_pointed_{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
         c, progress = 0, 10
+        isBreak = False
         while True:
             _, frame = capture.read()
             if frame is None:
