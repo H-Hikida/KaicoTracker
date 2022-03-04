@@ -25,7 +25,7 @@ To start
 ### Basic usage
 Test data is provided in the repository, so that users can test if the program woks or not. It is recommended to use `--auroCrop` option with the information of how larvae were separated by Columns/Rows. It prevent to create some useless data and noises.
 
-> KaicoTracker.py --input vtest_color_200.avi --autoCrop 4 5
+> KaicoTracker.py --input test.avi --autoCrop 4 5
 
 The regular output will be:
 
