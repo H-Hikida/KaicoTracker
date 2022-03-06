@@ -474,7 +474,7 @@ def plotDuration(dfDur, dfDist, args):
         plt.subplots_adjust(wspace=0, hspace=0.1, bottom=0.25, left=0.03, right=0.99)
     else:
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0.1)
-    axs[0].scatter(x=dfDist.Slice, y=dfDist.distance, data=dfDist, s=0.1, alpha=0.5, c="gray")
+    axs[0].scatter(x=dfDist.Slice, y=dfDist.distance, s=0.1, alpha=0.5, c="gray")
     axs[0].set_ylim(0,20)
     axs[0].set_xticks([])
     axs[0].set_xlim(listDur.min(), listDur.max())
@@ -484,7 +484,14 @@ def plotDuration(dfDur, dfDist, args):
     axs[1].set_yticks([])
     axs[1].set_xlabel("")
     axs[1].set_xticks(range(0, listDur.max()-listDur.min(), args.segment))
-    axs[1].set_xticklabels([i*args.lapse for i in range(0, listDur.max()-listDur.min(), args.segment)])
+    totalRange = (listDur.max()-listDur.min()) * args.lapse
+    if totalRange > 3600 * 5:
+        timeDiv = 3600
+    elif totalRange > 60 * 5:
+        timeDiv = 60
+    else:
+        timeDiv = 1
+    axs[1].set_xticklabels([i*args.lapse / timeDiv for i in range(0, listDur.max()-listDur.min(), args.segment)])
     axs[1].set_xlim(listDur.min(), listDur.max())
     sns.despine()
     plt.savefig('{}_locomotion_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
@@ -518,7 +525,7 @@ def mainAnalyze(args, df, analysis_out):
     # border determination
     xlims, ylims = borderSelection(dfAnalysis, args.autoCrop[0], args.autoCrop[1], args)
     print("Analysis is confined to l{}, r{}, b{}, t{}".format(xlims[0], xlims[1], ylims[0], ylims[1]))
-    analysis_out.write("# Analysis is confined to\nLeft: {}\nRight: {}\n:Bottom: {}\nTop: {}\n".format(xlims[0], xlims[1], ylims[0], ylims[1]))
+    analysis_out.write("# Analysis is confined to\nLeft: {}\nRight: {}\nBottom: {}\nTop: {}\n".format(xlims[0], xlims[1], ylims[0], ylims[1]))
     dfAnalysis = dfAnalysis[(dfAnalysis['XM'] > xlims[0]) & (dfAnalysis['XM'] < xlims[1]) & (dfAnalysis['YM'] > ylims[0]) & (dfAnalysis['YM'] < ylims[1])]
     xborder, yborder = defineBorders(dfAnalysis, args)
     if args.complexBorder:
