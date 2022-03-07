@@ -30,14 +30,13 @@ def argSetting():
     parser.add_argument('--segment', metavar='int', type=int, help='the length of segment used for area segmentation', default=-1)
     parser.add_argument('--segmentEdgeLength', metavar='px', type=int, help='length of segment square', default=-1)
     parser.add_argument('--window', metavar='frames', type=int, help='seed window for duration analysis', default=10)
+    parser.add_argument('--activeRatioThreshold', metavar='proportion', type=float, help='threshold for calculating active ratio', default=0.9)
     parser.add_argument('--complexBorder', action='store_true', help='If True, complex border determination was turned on, default=False')
     parser.add_argument('--analysisRange', metavar=('start', 'end'), nargs=2, type=int, help='a range of frames to be analyzed', default=(1, -1))
     parser.add_argument('--autoCrop', type=int, metavar=('columns', 'rows'), nargs=2, help='set coloumns and rows for cropping, set -1 for non-specified', default=(-1, -1))
     parser.add_argument('--autoCropPreAnalysis', metavar='Preanalyezed_frames', type=int, help='the number of preanalyzed frames', default=1000)
     parser.add_argument('--cropArea', metavar=('bottom', 'top', 'left', 'right'), type=int, nargs=4, help='Cropping position of frame in px', default=(0, -1, 0, -1))
     parser.add_argument('--cropThreshold', metavar='ratio', type=float, help='Threshold to cut inappropreate borders', default=0.01)
-    parser.add_argument('--live', action='store_true', help='Display processing movie, default=False')
-    parser.add_argument('--liveSave', action='store_true', help='Save processing movie, mainly for developmental purpose, default=False')
     parser.add_argument('--noPoint', action='store_true', help='Pointing stage will be skipped, default=False')
     parser.add_argument('--skipTracking', action='store_true', help='Skip Tracking stage, default=False, --trackingResult should be specified.')
     parser.add_argument('--onlyTracking', action='store_true', help='Only Tracking stage will be done, default=False')
@@ -51,6 +50,9 @@ def argSetting():
     parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
     parser.add_argument('--videoFormat', type=str, help='output format for videos', default='mp4', choices=['mp4', 'AVI'])
     parser.add_argument('--NoShrink', action='store_false', help='If specified, video is not shrinked')
+    parser.add_argument('--live', action='store_true', help='Display processing movie, default=False')
+    parser.add_argument('--liveSave', action='store_true', help='Save processing movie, mainly for developmental purpose, default=False')
+    parser.add_argument('--liveColor', action='store_true', help='Save processing movie with RGB color, mainly for developmental purpose, default=False')
     args = parser.parse_args()
     return args
 
@@ -230,6 +232,16 @@ def videoSetting(args, capture):
     return fourcc, fps, ext
 
 
+def saveVideo(video, frame, dsize, isColor):
+    if isColor:
+        video.write(cv.resize(frame, dsize=dsize))
+    else:
+        if len(frame.shape) == 2:
+            video.write(cv.resize(frame, dsize=dsize))
+        else:
+            video.write(cv.resize(cv.cvtColor(frame, cv.COLOR_BGR2GRAY), dsize=dsize))
+
+
 def mainTracking(args, analysis_out):
     if args.algo == 'KNN':
         backSub = cv.createBackgroundSubtractorKNN()
@@ -258,17 +270,17 @@ def mainTracking(args, analysis_out):
     print('Start Tracking')
     df_captures = []    
     startSlice = 0
-    fourcc, fps, ext = videoSetting(args, capture)
     if args.NoShrink:
         oWidth, oHeight = int(oWidth*0.5), int(oHeight*0.5)
     for inCap in args.input:
         videoIndex = str(args.input.index(inCap)+1)
-        outVideo_original = cv.VideoWriter("{}_original{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
-        outVideo_gray = cv.VideoWriter("{}_gray{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
-        outVideo_contours = cv.VideoWriter("{}_contours{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=True)
         print("Video {}".format(videoIndex)) 
         capture, fcount = startCapture(inCap)
+        fourcc, fps, ext = videoSetting(args, capture)
         bottom, top, left, right= setCropArea(capture, ylims, xlims, args)
+        outVideo_original = cv.VideoWriter("{}_original{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=args.liveColor)
+        outVideo_gray = cv.VideoWriter("{}_gray{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
+        outVideo_contours = cv.VideoWriter("{}_contours{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=args.liveColor)
         dfs =[]
         c, progress = 0, 10
         isBreak = False
@@ -282,6 +294,10 @@ def mainTracking(args, analysis_out):
                     isBreak = True
                     break
             c, progress = printCounter(c, fcount, progress)
+
+            # If the frame is out of analyis range, following process is skipped
+            if frame_num < max(0, args.analysisRange[0]-200):
+                continue
 
             # cropping & background subtraction & blurring foreground & contour detection
             if args.autoCrop == (-1, -1):
@@ -320,9 +336,12 @@ def mainTracking(args, analysis_out):
                 cv.imshow('FG Mask blur', fgMaskBlur)
                 cv.imshow('Contours', drawing)
                 if args.liveSave:
-                    outVideo_original.write(cv.resize(cv.cvtColor(frameCropped, cv.COLOR_BGR2GRAY), dsize=(oWidth, oHeight)))
-                    outVideo_gray.write(cv.resize(fgMaskBlur, dsize=(oWidth, oHeight)))
-                    outVideo_contours.write(cv.resize(drawing, dsize=(oWidth, oHeight)))            
+                    saveVideo(outVideo_original, frameCropped, (oWidth, oHeight), args.liveColor)
+                    saveVideo(outVideo_gray, fgMaskBlur, (oWidth, oHeight), False)
+                    saveVideo(outVideo_contours, drawing, (oWidth, oHeight), args.liveColor)
+                    # outVideo_original.write(cv.resize(cv.cvtColor(frameCropped, cv.COLOR_BGR2GRAY), dsize=(oWidth, oHeight)))
+                    # outVideo_gray.write(cv.resize(fgMaskBlur, dsize=(oWidth, oHeight)))
+                    # outVideo_contours.write(cv.resize(drawing, dsize=(oWidth, oHeight)))            
             keyboard = cv.waitKey(30)
             if keyboard == 'q' or keyboard == 27:
                 break
@@ -431,7 +450,7 @@ def CalcAreaChange(df, analysisRange, args, length=-1):
     plt.close('all')
 
 
-def CalcDuration(inf, window, thresholdDist=1, thresholdActive=0.95):
+def CalcDuration(inf, window, thresholdActive, thresholdDist=1):
     dfs = []
     aid = inf['id'].iloc[0]
     dfPosition = inf.set_index('Slice', drop=True)
@@ -491,7 +510,7 @@ def plotDuration(dfDur, dfDist, args):
         timeDiv = 60
     else:
         timeDiv = 1
-    axs[1].set_xticklabels([i*args.lapse / timeDiv for i in range(0, listDur.max()-listDur.min(), args.segment)])
+    axs[1].set_xticklabels([int(i*args.lapse) / timeDiv for i in range(0, listDur.max()-listDur.min(), args.segment)])
     axs[1].set_xlim(listDur.min(), listDur.max())
     sns.despine()
     plt.savefig('{}_locomotion_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
@@ -502,7 +521,7 @@ def plotDuration(dfDur, dfDist, args):
 def AnalyzeData(df, analysisRange, args): 
     merged = mergePoints(df, analysisRange)
     dfDist, totalDist, medSpeed = DistantCalc(merged, analysisRange, args)
-    dfDur = CalcDuration(dfDist, args.window)
+    dfDur = CalcDuration(dfDist, args.window, args.activeRatioThreshold)
     if len(dfDur) > 1:
         medDur = plotDuration(dfDur, dfDist, args)
     else:
@@ -609,7 +628,7 @@ def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, cropInfo):
         if args.NoShrink:
             oWidth, oHeight = int(oWidth*0.5), int(oHeight*0.5)
         fourcc, fps, ext = videoSetting(args, capture)
-        outVideo = cv.VideoWriter("{}_pointed_{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
+        outVideo = cv.VideoWriter("{}_pointed_{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=args.liveColor)
         c, progress = 0, 10
         isBreak = False
         while True:
@@ -622,6 +641,8 @@ def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, cropInfo):
                 if frame_num > args.analysisRange[1]:
                     isBreak = True
                     break
+            if frame_num < max(0, args.analysisRange[0]-200):
+                continue
             frameCropped = frame[vBottom:vTop, vLeft:vRight]
             temp = dfMerged[(dfMerged['Slice'] == frame_num) & (dfMerged['file'] == inCap)]
             if len(temp) > 0:
@@ -629,11 +650,11 @@ def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, cropInfo):
                     x = int(temp.loc[i, 'XM'])
                     y = int(temp.loc[i, 'YM'])
                     frameCropped = cv.circle(frameCropped, (x, y), 5, color=(0, 0, 255), thickness=-1)
-            im_gray = cv.cvtColor(frameCropped, cv.COLOR_BGR2GRAY)
+            # im_gray = cv.cvtColor(frameCropped, cv.COLOR_BGR2GRAY)
             if args.live:
-                cv.imshow('outVideo', im_gray)
-            outVideo.write(cv.resize(im_gray, dsize=(oWidth, oHeight)))
-
+                cv.imshow('outVideo', frameCropped)
+            # outVideo.write(cv.resize(im_gray, dsize=(oWidth, oHeight)))
+            saveVideo(outVideo, frameCropped, (oWidth, oHeight), args.liveColor)
             keyboard = cv.waitKey(30)
             if keyboard == 'q' or keyboard == 27:
                 break
