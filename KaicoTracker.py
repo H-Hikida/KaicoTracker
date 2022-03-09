@@ -496,13 +496,13 @@ def plotDuration(dfDur, dfDist, args):
     axs[0].scatter(x=dfDist.Slice, y=dfDist.distance, s=0.1, alpha=0.5, c="gray")
     axs[0].set_ylim(0,20)
     axs[0].set_xticks([])
-    axs[0].set_xlim(listDur.min(), listDur.max())
+    axs[0].set_xlim(listDur.min(), listDur.max()+5)
     sns.lineplot(x=dfDist.Slice, y=plotDur, drawstyle='steps-pre', color='gray', linewidth=1, ax=axs[1])
     axs[1].fill_between(x=dfDist.Slice, y1=plotDur, color='gray', step='pre')
     axs[1].set_ylim(0,1)
     axs[1].set_yticks([])
     axs[1].set_xlabel("")
-    axs[1].set_xticks(range(0, listDur.max()-listDur.min(), args.segment))
+    axs[1].set_xticks(range(0, listDur.max()-listDur.min()+5, args.segment))
     totalRange = (listDur.max()-listDur.min()) * args.lapse
     if totalRange > 3600 * 5:
         timeDiv = 3600
@@ -510,8 +510,8 @@ def plotDuration(dfDur, dfDist, args):
         timeDiv = 60
     else:
         timeDiv = 1
-    axs[1].set_xticklabels([int(i*args.lapse) / timeDiv for i in range(0, listDur.max()-listDur.min(), args.segment)])
-    axs[1].set_xlim(listDur.min(), listDur.max())
+    axs[1].set_xticklabels([int(i*args.lapse / timeDiv) for i in range(0, listDur.max()-listDur.min()+5, args.segment)])
+    axs[1].set_xlim(listDur.min(), listDur.max()+5)
     sns.despine()
     plt.savefig('{}_locomotion_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
     plt.close('all')
