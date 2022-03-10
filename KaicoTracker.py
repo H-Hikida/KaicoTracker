@@ -31,6 +31,7 @@ def argSetting():
     parser.add_argument('--segmentEdgeLength', metavar='px', type=int, help='length of segment square', default=-1)
     parser.add_argument('--window', metavar='frames', type=int, help='seed window for duration analysis', default=10)
     parser.add_argument('--activeRatioThreshold', metavar='proportion', type=float, help='threshold for calculating active ratio', default=0.9)
+    parser.add_argument('--figureHeight', metavar='px', type=float, help='max locomotory distance per frame shown in locomotion figure', default=20)
     parser.add_argument('--complexBorder', action='store_true', help='If True, complex border determination was turned on, default=False')
     parser.add_argument('--analysisRange', metavar=('start', 'end'), nargs=2, type=int, help='a range of frames to be analyzed', default=(1, -1))
     parser.add_argument('--autoCrop', type=int, metavar=('columns', 'rows'), nargs=2, help='set coloumns and rows for cropping, set -1 for non-specified', default=(-1, -1))
@@ -50,6 +51,7 @@ def argSetting():
     parser.add_argument('--format', type=str, help='output format for figures', default='png', choices=['png', 'pdf'])
     parser.add_argument('--videoFormat', type=str, help='output format for videos', default='mp4', choices=['mp4', 'AVI'])
     parser.add_argument('--NoShrink', action='store_false', help='If specified, video is not shrinked')
+    parser.add_argument('--fullOutput', action='store_true', help='If specified, all types of output are generated')
     parser.add_argument('--live', action='store_true', help='Display processing movie, default=False')
     parser.add_argument('--liveSave', action='store_true', help='Save processing movie, mainly for developmental purpose, default=False')
     parser.add_argument('--liveColor', action='store_true', help='Save processing movie with RGB color, mainly for developmental purpose, default=False')
@@ -278,9 +280,10 @@ def mainTracking(args, analysis_out):
         capture, fcount = startCapture(inCap)
         fourcc, fps, ext = videoSetting(args, capture)
         bottom, top, left, right= setCropArea(capture, ylims, xlims, args)
-        outVideo_original = cv.VideoWriter("{}_original{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=args.liveColor)
-        outVideo_gray = cv.VideoWriter("{}_gray{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
-        outVideo_contours = cv.VideoWriter("{}_contours{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=args.liveColor)
+        if args.liveSave:
+            outVideo_original = cv.VideoWriter("{}_original{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=args.liveColor)
+            outVideo_gray = cv.VideoWriter("{}_gray{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=False)
+            outVideo_contours = cv.VideoWriter("{}_contours{}.{}".format(args.prefix, videoIndex, ext), fourcc, fps, (oWidth, oHeight), isColor=args.liveColor)
         dfs =[]
         c, progress = 0, 10
         isBreak = False
@@ -355,9 +358,10 @@ def mainTracking(args, analysis_out):
             df_temp["file"] = inCap
             df_captures.append(df_temp)
         startSlice += fcount
-        outVideo_original.release()
-        outVideo_gray.release()
-        outVideo_contours.release()
+        if args.liveSave:
+            outVideo_original.release()
+            outVideo_gray.release()
+            outVideo_contours.release()
     cv.destroyAllWindows()
     df = pd.concat(df_captures, sort=False, ignore_index=True)
     df.to_csv('{}.txt'.format(args.prefix), sep='\t', index=False)
@@ -403,25 +407,26 @@ def DistantCalc(data, analysisRange, args):
     data1["distance"] = [0] + list(dist)
     accdist = np.cumsum(data1.distance)
     data1["accumlated"] = accdist
-    plt.figure(figsize=(6,2))
-    plt.scatter(x='Slice', y='distance', data=data1, s=0.1, alpha=0.5, c="gray")
-    plt.ylim(-1,20)
-    sns.despine()
-    plotTight(args.format)
-    plt.savefig('{}_distance_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
-    plt.close('all')
-    plt.figure(figsize=(6,2))
-    sns.lineplot(x='Slice', y='accumlated', data=data1, linewidth=1, color='gray')
-    sns.despine()
-    plotTight(args.format)
-    plt.savefig('{}_accdist_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
-    plt.close('all')
     active = data1[data1.distance>0]
-    if len(active) > 1:
-        sns.displot(data=active, x='distance', color= 'gray', height=2, aspect=3, kde=True)
+    if args.fullOutput:
+        plt.figure(figsize=(6,2))
+        plt.scatter(x='Slice', y='distance', data=data1, s=0.1, alpha=0.5, c="gray")
+        plt.ylim(-1,args.figureHeight)
+        sns.despine()
         plotTight(args.format)
-        plt.savefig('{}_speed_distplot_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
+        plt.savefig('{}_distance_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
         plt.close('all')
+        plt.figure(figsize=(6,2))
+        sns.lineplot(x='Slice', y='accumlated', data=data1, linewidth=1, color='gray')
+        sns.despine()
+        plotTight(args.format)
+        plt.savefig('{}_accdist_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
+        plt.close('all')
+        if len(active) > 1:
+            sns.displot(data=active, x='distance', color= 'gray', height=2, aspect=3, kde=True)
+            plotTight(args.format)
+            plt.savefig('{}_speed_distplot_{}.{}'.format(args.prefix, data1['id'].iloc[0], args.format), format=args.format, dpi=200)
+            plt.close('all')
     return (data1, list(accdist)[-1], active.distance.median())
 
 
@@ -480,9 +485,10 @@ def CalcDuration(inf, window, thresholdActive, thresholdDist=1):
 
 
 def plotDuration(dfDur, dfDist, args):
-    sns.displot(data=dfDur, x='duration', color= 'gray', height=2, aspect=3, kde=True)
-    plt.savefig('{}_duration_distplot_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
-    plt.close('all')
+    if args.fullOutput:
+        sns.displot(data=dfDur, x='duration', color= 'gray', height=2, aspect=3, kde=True)
+        plt.savefig('{}_duration_distplot_{}.{}'.format(args.prefix, dfDist['id'].iloc[0], args.format), format=args.format, dpi=200)
+        plt.close('all')
     listDur = dfDist.Slice.values
     activeTimePoint = []
     for i in dfDur.index:
@@ -494,7 +500,7 @@ def plotDuration(dfDur, dfDist, args):
     else:
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0.1)
     axs[0].scatter(x=dfDist.Slice, y=dfDist.distance, s=0.1, alpha=0.5, c="gray")
-    axs[0].set_ylim(0,20)
+    axs[0].set_ylim(0,args.figureHeight)
     axs[0].set_xticks([])
     axs[0].set_xlim(listDur.min(), listDur.max()+5)
     sns.lineplot(x=dfDist.Slice, y=plotDur, drawstyle='steps-pre', color='gray', linewidth=1, ax=axs[1])
