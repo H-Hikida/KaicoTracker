@@ -9,7 +9,7 @@ Each part can be run separately, and data created from other process can be anal
 
 ---
 ### Dependencies
-KaicoTracker is written in Python 3.6.3 with pandas (1.1.5), scipy (1.5.4), matplotlib (3.0.2), seaborn (0.11.1), and OpenCV2 (4.5.2.54). Please note that OpenCV version is 2.
+KaicoTracker is written in Python 3.6.3 with pandas (1.1.5), scipy (1.5.4), matplotlib (3.0.2), seaborn (0.11.1), and OpenCV2 (4.5.2.54).
 
 ---
 ### Installation
