@@ -160,7 +160,7 @@ Show the help message and exit.
 
 ---
 ### References
-Hikida and Katsuma (2022) *bioRxiv* [preprint]
+Hikida and Katsuma (2022) *Journal of Insect Biotechnology and Sericology*
 KaicoTracker: a robust and automated locomotory analysis for baculovirus-infected silkworm larvae
-https://www.biorxiv.org/content/10.1101/2022.05.10.491283v1
+https://doi.org/10.11416/jibs.91.2_021
 
