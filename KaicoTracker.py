@@ -37,11 +37,14 @@ def argSetting():
     parser.add_argument('--autoCrop', type=int, metavar=('columns', 'rows'), nargs=2, help='set coloumns and rows for cropping, set -1 for non-specified', default=(-1, -1))
     parser.add_argument('--autoCropPreAnalysis', metavar='Preanalyezed_frames', type=int, help='the number of preanalyzed frames', default=1000)
     parser.add_argument('--cropArea', metavar=('bottom', 'top', 'left', 'right'), type=int, nargs=4, help='Cropping position of frame in px', default=(0, -1, 0, -1))
+    parser.add_argument('--xBoundaries', type=int, metavar='array of int', nargs='+', help='Boundaries at X-axis. Must be specified with yBoundaries', default=False)
+    parser.add_argument('--yBoundaries', type=int, metavar='array of int', nargs='+', help='Boundaries at Y-axis. Must be specified with xBoundaries', default=False)
     parser.add_argument('--cropThreshold', metavar='ratio', type=float, help='Threshold to cut inappropreate borders', default=0.01)
     parser.add_argument('--noPoint', action='store_true', help='Pointing stage will be skipped, default=False')
     parser.add_argument('--skipTracking', action='store_true', help='Skip Tracking stage, default=False, --trackingResult should be specified.')
     parser.add_argument('--onlyTracking', action='store_true', help='Only Tracking stage will be done, default=False')
     parser.add_argument('--onlyAnalyis', action='store_true', help='Only Analysis stage will be done, default=False')
+    parser.add_argument('--skipBorderSelection', action='store_true', help='Border selection in Analysis stage will be skipped, default=False')
     parser.add_argument('--onlyPoint', action='store_true', help='Only Pointing stage will be done, default=False.')
     parser.add_argument('--cropAreaForPoint', metavar=('bottom', 'top', 'left', 'right'), type=int, nargs=4, help='Cropping position of frame in px, \
                         required when --skipTracking is specified and --noPoint is not specified, or --onlyPoint is specified', default=(0, -1, 0, -1))    
@@ -87,7 +90,7 @@ def borderSelection(df, ncols, nrows, args):
             iniVal = int(df['YM'].min())
             endVal = int(df['YM'].max())
             div = nrows
-        if div < 0:
+        if (div < 0) | (args.skipBorderSelection):
             cropBorders[i] = (int(iniVal), int(endVal))
             continue
         Slices = np.linspace(iniVal, endVal, num=endVal-iniVal)
@@ -176,19 +179,31 @@ def subBack(frame, backSub, args):
     return fgMaskBlur, contours, hierarchy
 
 
-def defineKDE(df, columnName):
+def defineKDE(df, columnName, args):
     smin = int(df[columnName].min())
     smax = int(df[columnName].max())
     Slices = np.linspace(smin, smax, num=smax-smin+1)
     kernel = stats.gaussian_kde(df[columnName])
     estimates = kernel(Slices)
-    return [smin] + [i + smin for i in signal.argrelmin(estimates)[0].tolist()] + [smax], Slices, estimates
+    if args.autoCrop == (-1, -1):
+        lmins = [i + smin for i in signal.argrelmin(estimates)[0].tolist()]
+    else:
+        df_pre = pd.DataFrame([(i + smin, estimates[i]) for i in signal.argrelmin(estimates)[0].tolist()])
+        df_sort = df_pre.sort_values([1], ascending=True, axis=0).reset_index(drop=True)
+        if columnName == 'XM':
+            aCrop = 0
+        elif columnName == 'YM':
+            aCrop = 1
+        df_selected = df_sort[0:args.autoCrop[aCrop]-1].copy()
+        lmins = df_selected.sort_values([0], ascending=True, axis=0)[0].tolist()
+    print("Boundaries in {}: {}".format(columnName, lmins))
+    return [smin] + lmins + [smax], Slices, estimates
 
 
 def defineBorders(df, args):
     borders = {}
     for i in ['XM', 'YM']:
-        outL, Slices, estimates = defineKDE(df, i)
+        outL, Slices, estimates = defineKDE(df, i, args)
         borders[i] = outL
         plt.scatter(x=Slices, y=estimates, s=0.1, c="gray")
         ymin, ymax = plt.ylim()
@@ -565,7 +580,13 @@ def mainAnalyze(args, df, analysis_out):
     print("Analysis is confined to l{}, r{}, b{}, t{}".format(xlims[0], xlims[1], ylims[0], ylims[1]))
     analysis_out.write("# Analysis is confined to\nLeft: {}\nRight: {}\nBottom: {}\nTop: {}\n".format(xlims[0], xlims[1], ylims[0], ylims[1]))
     dfAnalysis = dfAnalysis[(dfAnalysis['XM'] > xlims[0]) & (dfAnalysis['XM'] < xlims[1]) & (dfAnalysis['YM'] > ylims[0]) & (dfAnalysis['YM'] < ylims[1])]
-    xborder, yborder = defineBorders(dfAnalysis, args)
+    if bool(args.xBoundaries) & bool(args.yBoundaries):
+        xborder, yborder = args.xBoundaries, args.yBoundaries
+    elif bool(args.xBoundaries) | bool(args.yBoundaries):
+        print("Both xBoundaries and yBoundaries must be specified. Boundaries will be found automatically.")
+        xborder, yborder = defineBorders(dfAnalysis, args)
+    else:
+        xborder, yborder = defineBorders(dfAnalysis, args)
     if args.complexBorder:
         newXborder, newYborder = adjustBorders(dfAnalysis, xborder, yborder)
     for i, j in itertools.product(range(len(xborder)-1), range(len(yborder)-1)):
