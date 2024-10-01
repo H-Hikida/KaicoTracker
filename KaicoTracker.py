@@ -120,12 +120,20 @@ def plotTight(oFormat):
 def autoCrop(capture, fcount, backSub, args):
     dfs =[]
     processFrames = min(args.autoCropPreAnalysis, fcount)
+    if processFrames == fcount:
+        print('Designated frame number exceeded the length of the first video. {} frames will be analyzed.'.format(args.autoCropPreAnalysis))
     print('Tracking {} frames'.format(str(processFrames)))
     c, progress = 0, 10
+    frame_num = 0
     while True:
         _, frame = capture.read()
-        if (frame is None) | (capture.get(cv.CAP_PROP_POS_FRAMES) > processFrames):
+        if capture.get(cv.CAP_PROP_POS_FRAMES) > processFrames:
             break
+        elif (frame is None) & (frame_num == fcount):
+            break
+        elif frame is None:
+            frame_num += 1
+            continue
         frame_num = cv.CAP_PROP_POS_FRAMES
         c, progress = printCounter(c, processFrames, progress)
         _, contours, _ = subBack(frame, backSub, args)
@@ -278,6 +286,7 @@ def mainTracking(args, analysis_out):
         videoIndex = str(args.input.index(inCap)+1)
         print("Video {}".format(videoIndex)) 
         capture, fcount = startCapture(inCap)
+        frame_num = 0
         fourcc, fps, ext = videoSetting(args, capture)
         bottom, top, left, right= setCropArea(capture, ylims, xlims, args)
         if args.liveSave:
@@ -289,8 +298,12 @@ def mainTracking(args, analysis_out):
         isBreak = False
         while True:
             _, frame = capture.read()
-            if frame is None:
+            if (frame is None) & (frame_num >= (fcount + startSlice)):
                 break
+            elif frame is None:
+                print(frame_num)
+                frame_num += 1
+                continue
             frame_num = int(capture.get(cv.CAP_PROP_POS_FRAMES)) + startSlice
             if args.analysisRange[1] > 0:
                 if frame_num > args.analysisRange[1]:
@@ -624,6 +637,7 @@ def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, cropInfo):
     for inCap in args.input:
         videoIndex = str(args.input.index(inCap)+1)
         capture, fcount = startCapture(inCap)
+        frame_num = 0
         if not cropInfo:
             vTop = int(capture.get(cv.CAP_PROP_FRAME_HEIGHT))
             vRight = int(capture.get(cv.CAP_PROP_FRAME_WIDTH))
@@ -639,8 +653,11 @@ def mainPointing(args, vBottom, vTop, vLeft, vRight, dfMerged, cropInfo):
         isBreak = False
         while True:
             _, frame = capture.read()
-            if frame is None:
+            if (frame is None) & (frame_num == fcount):
                 break
+            elif frame is None:
+                frame_num += 1
+                continue
             c, progress = printCounter(c, fcount, progress)
             frame_num = startSlice + int(capture.get(cv.CAP_PROP_POS_FRAMES))
             if args.analysisRange[1] > 0:
